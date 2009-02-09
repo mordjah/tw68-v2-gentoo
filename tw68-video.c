@@ -47,6 +47,10 @@ MODULE_LICENSE("GPL");
 
 /* ------------------------------------------------------------------ */
 
+/*
+ *  FIXME - need to cater for cross-register values, e.g. AGCGAIN
+ *  	with routines used by 'get' and 'set' controls.
+ */
 static unsigned int video_nr[] = {[0 ... (TW68_MAXBOARDS - 1)] = UNSET };
 
 module_param_array(video_nr, int, NULL, 0444);
@@ -65,7 +69,9 @@ static unsigned int vid_limit = 16;
 module_param(vid_limit,int,0644);
 MODULE_PARM_DESC(vid_limit,"capture memory limit in megabytes");
 
-#define dprintk(level,fmt, arg...)	if (video_debug >= level) \
+#define dprintk(level, fmt, arg...)	if (video_debug >= level) \
+	printk(KERN_DEBUG "%s/0: " fmt, core->name , ## arg)
+#define iprintk(level, fmt, arg...)	if (irq_debug >= level) \
 	printk(KERN_DEBUG "%s/0: " fmt, core->name , ## arg)
 
 /* ------------------------------------------------------------------ */
@@ -76,23 +82,24 @@ static LIST_HEAD(tw6800_devlist);
 /* static data                                                         */
 
 static struct tw6800_fmt formats[] = {
-	{
-		.name     = "8 bpp, gray",
-		.fourcc   = V4L2_PIX_FMT_GREY,
-		.twformat = ColorFormatY8,
-		.depth    = 8,
+	{	/* TODO - confirm the next two aren't reversed */
+		.name     = "32 bpp RGB, le",
+		.fourcc   = V4L2_PIX_FMT_BGR32,
+		.twformat = ColorFormatRGB32,
+		.depth    = 32,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "15 bpp RGB, le",
-		.fourcc   = V4L2_PIX_FMT_RGB555,
-		.twformat = ColorFormatRGB15,
-		.depth    = 16,
+		.name     = "32 bpp RGB, be",
+		.fourcc   = V4L2_PIX_FMT_RGB32,
+		.twformat = ColorFormatRGB32 | ColorFormatBSWAP |
+			    ColorFormatWSWAP,
+		.depth    = 32,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "15 bpp RGB, be",
-		.fourcc   = V4L2_PIX_FMT_RGB555X,
-		.twformat = ColorFormatRGB15 | ColorFormatBSWAP,
-		.depth    = 16,
+		.name     = "24 bpp RGB, le",
+		.fourcc   = V4L2_PIX_FMT_BGR24,
+		.twformat = ColorFormatRGB24,
+		.depth    = 24,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
 		.name     = "16 bpp RGB, le",
@@ -107,22 +114,16 @@ static struct tw6800_fmt formats[] = {
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "24 bpp RGB, le",
-		.fourcc   = V4L2_PIX_FMT_BGR24,
-		.twformat = ColorFormatRGB24,
-		.depth    = 24,
+		.name     = "15 bpp RGB, le",
+		.fourcc   = V4L2_PIX_FMT_RGB555,
+		.twformat = ColorFormatRGB15,
+		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
-		.name     = "32 bpp RGB, le",
-		.fourcc   = V4L2_PIX_FMT_BGR32,
-		.twformat = ColorFormatRGB32,
-		.depth    = 32,
-		.flags    = FORMAT_FLAGS_PACKED,
-	},{
-		.name     = "32 bpp RGB, be",
-		.fourcc   = V4L2_PIX_FMT_RGB32,
-		.twformat = ColorFormatRGB32 | ColorFormatBSWAP | ColorFormatWSWAP,
-		.depth    = 32,
+		.name     = "15 bpp RGB, be",
+		.fourcc   = V4L2_PIX_FMT_RGB555X,
+		.twformat = ColorFormatRGB15 | ColorFormatBSWAP,
+		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
 	},{
 		.name     = "4:2:2, packed, YUYV",
@@ -179,7 +180,7 @@ static struct tw68_ctrl tw6800_ctls[] = {
 			.minimum       = 0,
 			.maximum       = 0xff,
 			.step          = 1,
-			.default_value = 0x3f,
+			.default_value = 0x7f,
 			.type          = V4L2_CTRL_TYPE_INTEGER,
 		},
 		.off                   = 0,
@@ -227,12 +228,9 @@ static struct tw68_ctrl tw6800_ctls[] = {
 			.type          = V4L2_CTRL_TYPE_BOOLEAN,
 		},
 		.off                   = 0,
-		.reg                   = TW68_AGCGAIN,
-		.mask                  = 0x00ff,
-		.shift                 = 0,
-		.reg2			= TW68_IAGC,
-		.mask2			= 0x01,
-		.shift2			= 8,
+		.reg                   = TW68_ACNTL,
+		.mask                  = 0x10,
+		.shift                 = 4,
 	}, {
 		.v = {
 			.id            = V4L2_CID_COLOR_KILLER,
@@ -242,9 +240,9 @@ static struct tw68_ctrl tw6800_ctls[] = {
 			.default_value = 0x1,
 			.type          = V4L2_CTRL_TYPE_BOOLEAN,
 		},
-		.reg                   = TW68_COLORKILL,
-		.mask                  = 0xff,
-		.shift                 = 0,
+		.reg                   = TW68_MISC3,
+		.mask                  = 0x80,
+		.shift                 = 7,
 	}
 };
 static const int TW6800_CTLS = ARRAY_SIZE(tw6800_ctls);
@@ -273,7 +271,7 @@ int tw6800_ctrl_query(struct tw68_core *core, struct v4l2_queryctrl *qctrl)
 {
 	int i;
 
-printk(KERN_DEBUG  "Entered ctrl_query\n");
+printk(KERN_DEBUG  "Entered ctrl_query for %d\n", qctrl->id);
 	if (qctrl->id < V4L2_CID_BASE ||
 	    qctrl->id >= V4L2_CID_LASTP1)
 		return -EINVAL;
@@ -285,6 +283,7 @@ printk(KERN_DEBUG  "Entered ctrl_query\n");
 		return 0;
 	}
 	*qctrl = tw6800_ctls[i].v;
+
 	/* Report chroma AGC as inactive when SECAM is selected */
 	if (tw6800_ctls[i].v.id == V4L2_CID_CHROMA_AGC &&
 	    core->tvnorm & V4L2_STD_SECAM)
@@ -302,7 +301,6 @@ static int res_get(struct tw6800_dev *dev, struct tw6800_fh *fh,
 {
 	struct tw68_core *core = dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (fh->resources & bit)
 		/* have it already allocated */
 		return 1;
@@ -339,7 +337,6 @@ void res_free(struct tw6800_dev *dev, struct tw6800_fh *fh, unsigned int bits)
 {
 	struct tw68_core *core = dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	BUG_ON((fh->resources & bits) != bits);
 
 	mutex_lock(&core->lock);
@@ -357,12 +354,13 @@ int tw68_video_mux(struct tw68_core *core, unsigned int input)
  * As a first try, we will do the minimum - position the input value
  * into position for setting into the INFORM register
  */
-printk(KERN_DEBUG  "Entered %s\n", __func__);
+printk(KERN_DEBUG  "Entered %s, INFORM=%02x\n", __func__, tw_read(TW68_INFORM));
 	if (input > 3)
 		return -EINVAL;
 	core->input = input;	/* save the value into control struct */
-	tw_andor(TW68_INFORM, 0x03 << 4, input);
 	dprintk(1, "tw6800: video_mux: input=%d\n", input);
+	input <<= 2;	/* position value into b3-2 */
+	tw_andor(TW68_INFORM, 0x03 << 2, input);
 
 	return 0;
 }
@@ -377,21 +375,16 @@ static int start_video_dma(struct tw6800_dev    *dev,
 	struct tw68_core *core = dev->core;
 	/* setup fifo + format */
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	tw68_set_scale(core, buf->vb.width, buf->vb.height, buf->vb.field);
-#if 0
-	tw_write(MO_COLOR_CTRL, buf->fmt->twformat | ColorFormatGamma);
-	/* reset counter */
-	tw_write(MO_VIDY_GPCNTRL,GP_COUNT_CONTROL_RESET);
-#endif
 	q->count = 1;
-
 	/* set risc starting address */
 	tw_write(TW68_DMAP_SA, cpu_to_le32(buf->risc.dma));
+	/* start risc processor plus fifo and set format */
+	tw_andor(TW68_DMAC, 0x7f, buf->fmt->twformat |
+		 ColorFormatGamma | TW68_DMAP_EN | TW68_FIFO_EN);
 	/* enable irqs */
-	tw_set(TW68_INTMASK, core->pci_irqmask | TW68_DMAPI);
-	/* start risc processor plus fifo */
-	tw_set(TW68_DMAC, 0x03);
+	core->pci_irqmask |= TW68_VID_INTS;
+	tw_set(TW68_INTMASK, core->pci_irqmask);
 	return 0;
 }
 
@@ -400,8 +393,9 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 static int stop_video_dma(struct tw6800_dev    *dev)
 {
 	struct tw68_core *core = dev->core;
-	tw_clear(TW68_INTMASK, TW68_DMAPI);
-	tw_clear(TW68_DMAC, 0x03);
+	core->pci_irqmask &= ~TW68_VID_INTS;
+	tw_clear(TW68_INTMASK, TW68_VID_INTS);
+	tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 	return 0;
 }
 #endif
@@ -482,7 +476,6 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 	struct videobuf_dmabuf *dma=videobuf_to_dma(&buf->vb);
 	int rc, init_buffer = 0;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	BUG_ON(NULL == fh->fmt);
 	if (fh->width  < 48 || fh->width  > norm_maxw(core->tvnorm) ||
 	    fh->height < 32 || fh->height > norm_maxh(core->tvnorm))
@@ -568,7 +561,6 @@ buffer_queue(struct videobuf_queue *vq, struct videobuf_buffer *vb)
 	struct tw68_core      *core = dev->core;
 	struct tw68_dmaqueue  *q    = &dev->vidq;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	/* append a 'JUMP to stopper' to the buffer risc program */
 	buf->risc.jmp[0] = cpu_to_le32(RISC_JUMP | RISC_INT_BIT);
 	buf->risc.jmp[1] = cpu_to_le32(q->stopper.dma);
@@ -586,7 +578,6 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 		start_video_dma(dev, q, buf);
 		buf->vb.state = VIDEOBUF_ACTIVE;
 		buf->count    = q->count++;
-printk(KERN_DEBUG "%s: Resetting timer\n", __func__);
 		mod_timer(&q->timeout, jiffies+BUFFER_TIMEOUT);
 		dprintk(2,"[%p/%d] buffer_queue - first active\n",
 			buf, buf->vb.i);
@@ -640,7 +631,6 @@ static struct videobuf_queue_ops tw6800_video_qops = {
 
 static struct videobuf_queue* get_queue(struct tw6800_fh *fh)
 {
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	switch (fh->type) {
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
 		return &fh->vidq;
@@ -652,7 +642,6 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 
 static int get_resource(struct tw6800_fh *fh)
 {
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	switch (fh->type) {
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
 		return RESOURCE_VIDEO;
@@ -673,7 +662,6 @@ static int video_open(struct inode *inode, struct file *file)
 	enum v4l2_buf_type type = 0;
 	int radio = 0;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	lock_kernel();
 	list_for_each_entry(h, &tw6800_devlist, devlist) {
 		if (h->video_dev->minor == minor) {
@@ -724,7 +712,6 @@ video_read(struct file *file, char __user *data, size_t count, loff_t *ppos)
 {
 	struct tw6800_fh *fh = file->private_data;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	switch (fh->type) {
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
 		if (res_locked(fh->dev,RESOURCE_VIDEO))
@@ -743,7 +730,6 @@ video_poll(struct file *file, struct poll_table_struct *wait)
 	struct tw6800_fh *fh = file->private_data;
 	struct tw68_buffer *buf;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (res_check(fh,RESOURCE_VIDEO)) {
 		/* streaming capture */
 		if (list_empty(&fh->vidq.stream))
@@ -768,7 +754,6 @@ static int video_release(struct inode *inode, struct file *file)
 	struct tw6800_fh  *fh  = file->private_data;
 	struct tw6800_dev *dev = fh->dev;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	/* turn off overlay */
 	if (res_check(fh, RESOURCE_OVERLAY)) {
 		/* FIXME */
@@ -797,7 +782,6 @@ video_mmap(struct file *file, struct vm_area_struct * vma)
 {
 	struct tw6800_fh *fh = file->private_data;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	return videobuf_mmap_mapper(get_queue(fh), vma);
 }
 
@@ -807,17 +791,16 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 int tw68_get_control (struct tw68_core  *core, struct v4l2_control *ctl)
 {
 	struct tw68_ctrl  *c    = NULL;
-	u32 value;
 	int i;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
-	for (i = 0; i < TW6800_CTLS; i++)
+	for (i = 0; i < TW6800_CTLS; i++) {
 		if (tw6800_ctls[i].v.id == ctl->id)
 			c = &tw6800_ctls[i];
+	}
 	if (unlikely(NULL == c))
 		return -EINVAL;
-
-	value = c->sreg ? tw_sread(c->sreg) : tw_read(c->reg);
+#if 0
+	value = tw_read(c->reg);
 	switch (ctl->id) {
 	case V4L2_CID_AUDIO_BALANCE:
 		ctl->value = ((value & 0x7f) < 0x40) ?
@@ -832,10 +815,14 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 			      c->mask) >> c->shift;
 		break;
 	}
-	dprintk(1,"get_control id=0x%X(%s) ctrl=0x%02x,"
-		"reg=0x%02x val=0x%02x (mask 0x%02x)%s\n",
-		ctl->id, c->v.name, ctl->value, c->reg,
-		value,c->mask, c->sreg ? " [shadowed]" : "");
+#endif
+	ctl->value = ((tw_read(c->reg) & c->mask) >> c->shift) + c->off;
+	if (c->reg2)
+		ctl->value +=
+		    ((tw_read(c->reg2) & c->mask2) >> c->shift2) << 8;
+	dprintk(1,"get_control id=0x%X(%s) ctrl=0x%x,"
+		"reg=0x%02x (mask 0x%02x)\n",
+		ctl->id, c->v.name, ctl->value, c->reg, c->mask);
 	return 0;
 }
 EXPORT_SYMBOL(tw68_get_control);
@@ -843,10 +830,9 @@ EXPORT_SYMBOL(tw68_get_control);
 int tw68_set_control(struct tw68_core *core, struct v4l2_control *ctl)
 {
 	struct tw68_ctrl *c = NULL;
-	u32 value,mask;
+	u32 value, vvalue, mask;
 	int i;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	for (i = 0; i < TW6800_CTLS; i++) {
 		if (tw6800_ctls[i].v.id == ctl->id) {
 			c = &tw6800_ctls[i];
@@ -855,12 +841,14 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (unlikely(NULL == c))
 		return -EINVAL;
 
+	/* limit value to be within allowable range */
 	if (ctl->value < c->v.minimum)
 		ctl->value = c->v.minimum;
 	if (ctl->value > c->v.maximum)
 		ctl->value = c->v.maximum;
 	mask=c->mask;
 	switch (ctl->id) {
+#if 0
 	case V4L2_CID_AUDIO_BALANCE:
 		value = (ctl->value < 0x40) ?
 			(0x7f - ctl->value) : (ctl->value - 0x40);
@@ -868,6 +856,7 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 	case V4L2_CID_AUDIO_VOLUME:
 		value = 0x3f - (ctl->value & 0x3f);
 		break;
+#endif
 	case V4L2_CID_SATURATION:
 		/* special v_sat handling */
 
@@ -875,32 +864,37 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 
 		if (core->tvnorm & V4L2_STD_SECAM) {
 			/* For SECAM, both U and V sat should be equal */
-			value=value<<8|value;
+			vvalue = value;
 		} else {
 			/* Keeps U Saturation proportional to V Sat */
-			value=(value*0x5a)/0x7f<<8|value;
+			vvalue=(value*0x5a)/0x7f;
 		}
-		mask=0xffff;
+		tw_write(TW68_SAT_V, vvalue);
+		tw_write(TW68_SAT_U, value);
 		break;
 	case V4L2_CID_CHROMA_AGC:
 		/* Do not allow chroma AGC to be enabled for SECAM */
 		value = ((ctl->value - c->off) << c->shift) & c->mask;
 		if (core->tvnorm & V4L2_STD_SECAM && value)
 			return -EINVAL;
+		tw_andor(c->reg, c->mask, value);
+		break;
+	case V4L2_CID_COLOR_KILLER:
+		if (ctl->value)
+			value = 0xe0;
+		else
+			value = 0x00;
+		tw_andor(c->reg, 0xe0, value);
 		break;
 	default:
 		value = ((ctl->value - c->off) << c->shift) & c->mask;
+		tw_write(c->reg, value);
 		break;
 	}
 	dprintk(1,"set_control id=0x%X(%s) ctrl=0x%02x, "
-		  "reg=0x%02x val=0x%02x (mask 0x%02x)%s\n",
+		  "reg=0x%02x val=0x%02x (mask 0x%02x)\n",
 		  ctl->id, c->v.name, ctl->value, c->reg, value,
-		  mask, c->sreg ? " [shadowed]" : "");
-	if (c->sreg) {
-		tw_sandor(c->sreg, c->reg, mask, value);
-	} else {
-		tw_andor(c->reg, mask, value);
-	}
+		  mask);
 	return 0;
 }
 EXPORT_SYMBOL(tw68_set_control);
@@ -910,7 +904,6 @@ static void init_controls(struct tw68_core *core)
 	struct v4l2_control ctrl;
 	int i;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	for (i = 0; i < TW6800_CTLS; i++) {
 		ctrl.id=tw6800_ctls[i].v.id;
 		ctrl.value=tw6800_ctls[i].v.default_value;
@@ -927,7 +920,6 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 {
 	struct tw6800_fh  *fh   = priv;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	f->fmt.pix.width        = fh->width;
 	f->fmt.pix.height       = fh->height;
 	f->fmt.pix.field        = fh->vidq.field;
@@ -947,11 +939,11 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 	enum v4l2_field   field;
 	unsigned int      maxw, maxh;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	fmt = format_by_fourcc(f->fmt.pix.pixelformat);
 	if (NULL == fmt)
 		return -EINVAL;
 
+printk(KERN_DEBUG "Trying format %s\n", fmt->name);
 	field = f->fmt.pix.field;
 	maxw  = norm_maxw(core->tvnorm);
 	maxh  = norm_maxh(core->tvnorm);
@@ -987,7 +979,8 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 		(f->fmt.pix.width * fmt->depth) >> 3;
 	f->fmt.pix.sizeimage =
 		f->fmt.pix.height * f->fmt.pix.bytesperline;
-
+printk(KERN_DEBUG "heigth=%d,width=%d,bpl=%d,imgsize=%d\n",
+  f->fmt.pix.height,f->fmt.pix.width, f->fmt.pix.bytesperline,f->fmt.pix.sizeimage);
 	return 0;
 }
 
@@ -997,7 +990,6 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 	struct tw6800_fh  *fh   = priv;
 	int err = vidioc_try_fmt_vid_cap (file,priv,f);
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (0 != err)
 		return err;
 	fh->fmt        = format_by_fourcc(f->fmt.pix.pixelformat);
@@ -1013,7 +1005,6 @@ static int vidioc_querycap (struct file *file, void  *priv,
 	struct tw6800_dev *dev  = ((struct tw6800_fh *)priv)->dev;
 	struct tw68_core  *core = dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	strcpy(cap->driver, "tw6800");
 	strlcpy(cap->card, core->board.name, sizeof(cap->card));
 	sprintf(cap->bus_info,"PCI:%s",pci_name(dev->pci));
@@ -1021,8 +1012,10 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 	cap->capabilities =
 		V4L2_CAP_VIDEO_CAPTURE |
 		V4L2_CAP_READWRITE     |
-		V4L2_CAP_STREAMING     |
-		V4L2_CAP_VBI_CAPTURE;
+#if 0
+		V4L2_CAP_VBI_CAPTURE   |
+#endif
+		V4L2_CAP_STREAMING;
 	if (UNSET != core->board.tuner_type)
 		cap->capabilities |= V4L2_CAP_TUNER;
 	return 0;
@@ -1031,7 +1024,6 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 static int vidioc_enum_fmt_vid_cap (struct file *file, void  *priv,
 					struct v4l2_fmtdesc *f)
 {
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (unlikely(f->index >= ARRAY_SIZE(formats)))
 		return -EINVAL;
 
@@ -1046,7 +1038,6 @@ static int vidioc_reqbufs (struct file *file, void *priv,
 			   struct v4l2_requestbuffers *p)
 {
 	struct tw6800_fh  *fh   = priv;
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	return (videobuf_reqbufs(get_queue(fh), p));
 }
 
@@ -1054,7 +1045,6 @@ static int vidioc_querybuf (struct file *file, void *priv,
 			    struct v4l2_buffer *p)
 {
 	struct tw6800_fh  *fh   = priv;
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	return (videobuf_querybuf(get_queue(fh), p));
 }
 
@@ -1062,7 +1052,6 @@ static int vidioc_qbuf (struct file *file, void *priv,
 			struct v4l2_buffer *p)
 {
 	struct tw6800_fh  *fh   = priv;
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	return (videobuf_qbuf(get_queue(fh), p));
 }
 
@@ -1070,7 +1059,6 @@ static int vidioc_dqbuf (struct file *file, void *priv,
 			 struct v4l2_buffer *p)
 {
 	struct tw6800_fh  *fh   = priv;
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	return (videobuf_dqbuf(get_queue(fh), p,
 				file->f_flags & O_NONBLOCK));
 }
@@ -1081,7 +1069,6 @@ static int vidioc_streamon(struct file *file, void *priv,
 	struct tw6800_fh  *fh   = priv;
 	struct tw6800_dev *dev  = fh->dev;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	/* We should remember that this driver also supports teletext,  */
 	/* so we have to test if the v4l2_buf_type is VBI capture data. */
 	if (unlikely((fh->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) &&
@@ -1093,6 +1080,19 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 
 	if (unlikely(!res_get(dev,fh,get_resource(fh))))
 		return -EBUSY;
+#if 0
+/* ****** Debugging - dump all registers ****** */
+{
+int i;
+struct tw68_core  *core = dev->core;
+  printk("PCI Registers:\n");
+  for (i = 0; i <= 0x6c; i += 4)
+    printk("0x%03x: 0x%08x\n", i, tw_read(i));
+  printk("Decoder Control Registers:\n");
+  for (i = 0x204; i <= 0x2e8; i += 4)
+    printk("0x%03x: 0x%02x\n", i, tw_read(i));
+}
+#endif
 	return videobuf_streamon(get_queue(fh));
 }
 
@@ -1103,7 +1103,6 @@ static int vidioc_streamoff(struct file *file, void *priv,
 	struct tw6800_dev *dev  = fh->dev;
 	int               err, res;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if ((fh->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) &&
 	    (fh->type != V4L2_BUF_TYPE_VBI_CAPTURE))
 		return -EINVAL;
@@ -1124,7 +1123,6 @@ static int vidioc_s_std (struct file *file, void *priv,
 {
 	struct tw68_core  *core = ((struct tw6800_fh *)priv)->dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	mutex_lock(&core->lock);
 	tw68_set_tvnorm(core,*tvnorms);
 	mutex_unlock(&core->lock);
@@ -1147,7 +1145,6 @@ int tw68_enum_input (struct tw68_core  *core,struct v4l2_input *i)
 	};
 	unsigned int n;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	n = i->index;
 	if (n >= 4)
 		return -EINVAL;
@@ -1169,7 +1166,6 @@ static int vidioc_enum_input (struct file *file, void *priv,
 				struct v4l2_input *i)
 {
 	struct tw68_core  *core = ((struct tw6800_fh *)priv)->dev->core;
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	return tw68_enum_input (core,i);
 }
 
@@ -1178,7 +1174,6 @@ static int vidioc_g_input (struct file *file, void *priv,
 {
 	struct tw68_core  *core = ((struct tw6800_fh *)priv)->dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	*i = core->input;
 	return 0;
 }
@@ -1188,7 +1183,6 @@ static int vidioc_s_input (struct file *file, void *priv,
 {
 	struct tw68_core  *core = ((struct tw6800_fh *)priv)->dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (i >= 4)
 		return -EINVAL;
 
@@ -1206,7 +1200,6 @@ static int vidioc_queryctrl (struct file *file, void *priv,
 {
 	struct tw68_core *core = ((struct tw6800_fh *)priv)->dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	qctrl->id = v4l2_ctrl_next(ctrl_classes, qctrl->id);
 	if (unlikely(qctrl->id == 0))
 		return -EINVAL;
@@ -1217,7 +1210,6 @@ static int vidioc_g_ctrl (struct file *file, void *priv,
 			  struct v4l2_control *ctl)
 {
 	struct tw68_core  *core = ((struct tw6800_fh *)priv)->dev->core;
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	return tw68_get_control(core,ctl);
 }
 
@@ -1225,7 +1217,6 @@ static int vidioc_s_ctrl (struct file *file, void *priv,
 				struct v4l2_control *ctl)
 {
 	struct tw68_core  *core = ((struct tw6800_fh *)priv)->dev->core;
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	return tw68_set_control(core,ctl);
 }
 
@@ -1235,7 +1226,6 @@ static int vidioc_g_frequency (struct file *file, void *priv,
 	struct tw6800_fh  *fh   = priv;
 	struct tw68_core  *core = fh->dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (unlikely(UNSET == core->board.tuner_type))
 		return -EINVAL;
 
@@ -1248,7 +1238,6 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 int tw68_set_freq (struct tw68_core  *core,
 				struct v4l2_frequency *f)
 {
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (unlikely(UNSET == core->board.tuner_type))
 		return -EINVAL;
 	if (unlikely(f->tuner != 0))
@@ -1271,7 +1260,6 @@ static int vidioc_s_frequency (struct file *file, void *priv,
 	struct tw6800_fh  *fh   = priv;
 	struct tw68_core  *core = fh->dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (unlikely(0 == fh->radio && f->type != V4L2_TUNER_ANALOG_TV))
 		return -EINVAL;
 	if (unlikely(1 == fh->radio && f->type != V4L2_TUNER_RADIO))
@@ -1291,7 +1279,6 @@ static void tw6800_vid_timeout(unsigned long data)
 	struct tw68_buffer *buf;
 	unsigned long flags;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	spin_lock_irqsave(&dev->slock,flags);
 	while (!list_empty(&q->active)) {
 		buf = list_entry(q->active.next, struct tw68_buffer, vb.queue);
@@ -1300,7 +1287,7 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
 		wake_up(&buf->vb.done);
 		printk("%s/0: [%p/%d] timeout - dma=0x%08lx\n", core->name,
 		       buf, buf->vb.i, (unsigned long)buf->risc.dma);
-//		tw68_risc_program_dump(core, &buf->risc);
+		tw68_risc_program_dump(core, &buf->risc);
 	}
 	restart_video_queue(dev,q);
 	spin_unlock_irqrestore(&dev->slock,flags);
@@ -1311,27 +1298,68 @@ printk(KERN_DEBUG  "Entered %s\n", __func__);
  *
  * 	Handle a PCI interrupt from the video circuitry
  */
-static void tw6800_vid_irq(struct tw6800_dev *dev)
+static void tw6800_vid_irq(struct tw6800_dev *dev, u32 status)
 {
 	struct tw68_core *core = dev->core;
-	u32 status, mask;
+	u32 reg;
+	struct tw68_dmaqueue *q = &dev->vidq;
 
-	status = tw_read(TW68_INTSTAT);
-	mask = tw_read(TW68_INTMASK);
-	if (0 == (status & mask))
+	if (0 == (status & TW68_VID_INTS))
 		return;		/* if not a video interrupt, return */
-	tw_write(TW68_INTSTAT, status);	/* reset the interrupt */
 
-	/* TODO - need to enable interrupts for RISC problems */
+	/* reset interrupts handled by this routine */
+	tw_write(TW68_INTSTAT, TW68_VID_INTS);
+
+	if (status & TW68_PABORT) {	/* TODO - what should we do? */
+		iprintk(2, "PABORT interrupt\n");
+	}
+	if (status & TW68_DMAPERR) {
+		iprintk(2, "DMAPERR interrupt\n");
+		/* Stop risc & fifo */
+		tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+		tw_clear(TW68_INTMASK, TW68_VID_INTS);
+		core->pci_irqmask &= ~TW68_VID_INTS;
+		return;
+	}
+	if (status & TW68_FDMIS) {	/* logic error somewhere */
+		iprintk(2, "FDMIS interrupt\n");
+		/* Stop risc & fifo */
+		tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+		tw_clear(TW68_INTMASK, TW68_VID_INTS);
+		core->pci_irqmask &= ~TW68_VID_INTS;
+		return;
+	}
+	if (status & TW68_FFOF) {	/* probably a logic error */
+		iprintk(2, "FFOF interrupt\n");
+		/* Stop risc & fifo */
+		tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+		tw_clear(TW68_INTMASK, TW68_VID_INTS);
+		core->pci_irqmask &= ~TW68_VID_INTS;
+		return;
+	}
 
 	if (status & TW68_DMAPI) {
-		dprintk(2, "DMAPI interrupt\n");
+		iprintk(2, "DMAPI interrupt\n");
 		spin_lock(&dev->slock);
-//		restart_video_queue(dev, &dev->vidq);
-		tw68_wakeup(core, &dev->vidq, 2);
+		/*
+		 * DMAPI shows we have reached the end of the risc code
+		 * for the current buffer.  tw68_wakeup will take care
+		 * of the buffer handling, plus any non-video requirements.
+		 */
+		tw68_wakeup(core, q, 2);
 		spin_unlock(&dev->slock);
+		/* Check whether we have gotten into 'stopper' code */
+		reg = tw_read(TW68_DMAP_PP);
+		if ((reg >= q->stopper.dma) &&
+		    (reg < q->stopper.dma + q->stopper.size)) {
+			/* Yes - stop risc & fifo */
+			tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+			tw_clear(TW68_INTMASK, TW68_VID_INTS);
+			core->pci_irqmask &= ~TW68_VID_INTS;
+			dprintk(2, "stopper risc code entered\n");
+			return;
+		}
 	}
-else printk(KERN_DEBUG "%s: Unexpected interrupt status=0x%08x", __func__, status);
 }
 
 /*
@@ -1358,15 +1386,11 @@ static irqreturn_t tw6800_irq(int irq, void *dev_id)
 	for (loop = 0; loop < 10; loop++) {
 		/* check for all anticipated interrupts */
 		status = tw_read(TW68_INTSTAT);
-		if (0 == (status & (core->pci_irqmask | TW68_DMAPI)))
+		if (0 == (status & core->pci_irqmask))
 			goto out;	/* all interrupts handled */
 		handled = 1;
-#if 0
-		if (status & core->pci_irqmask)	/* other device */
-			tw88_core_irq(core, status);
-#endif
-		if (status & TW68_DMAPI)	/* video interrupt */
-			tw6800_vid_irq(dev);
+		if (status & TW68_VID_INTS)	/* video interrupt */
+			tw6800_vid_irq(dev, status);
 		
 	};
 	if (10 == loop) {
@@ -1613,7 +1637,6 @@ static void __devexit tw6800_finidev(struct pci_dev *pci_dev)
 	struct tw6800_dev *dev = pci_get_drvdata(pci_dev);
 	struct tw68_core *core = dev->core;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	/* stop thread */
 	if (core->kthread) {
 		kthread_stop(core->kthread);
@@ -1667,7 +1690,6 @@ static int tw6800_resume(struct pci_dev *pci_dev)
 	struct tw68_core *core = dev->core;
 	int err;
 
-printk(KERN_DEBUG  "Entered %s\n", __func__);
 	if (dev->state.disabled) {
 		err=pci_enable_device(pci_dev);
 		if (err) {

@@ -46,6 +46,9 @@
 #define	TW68_GPOE		0x028
 #define	TW68_TESTREG		0x02C
 #define	TW68_VBIINST		0x06C
+/* define bits in FIFO and DMAP Control reg */
+#define	TW68_DMAP_EN		(1 << 0)
+#define	TW68_FIFO_EN		(1 << 1)
 /* define the Interrupt Status Register bits */
 #define	TW68_SBDONE		(1 << 0)
 #define	TW68_DMAPI		(1 << 1)
@@ -149,11 +152,12 @@
 #define VideoFormatPAL60	 0x6
 #define VideoFormatSECAM	 0x2
 
-#define ColorFormatRGB32	 0x0000
-#define ColorFormatRGB24	 0x0011
-#define ColorFormatRGB16	 0x0022
-#define ColorFormatRGB15	 0x0033
-#define ColorFormatYUY2		 0x0044
+#define ColorFormatRGB32	 0x00
+#define ColorFormatRGB24	 0x10
+#define ColorFormatRGB16	 0x20
+#define ColorFormatRGB15	 0x30
+#define ColorFormatYUY2		 0x40
+#if 0
 #define ColorFormatBTYUV	 0x0055
 #define ColorFormatY8		 0x0066
 #define ColorFormatRGB8		 0x0077
@@ -162,9 +166,12 @@
 #define ColorFormatYUV12	 0x00AA
 #define ColorFormatYUV9		 0x00BB
 #define ColorFormatRAW		 0x00EE
-#define ColorFormatBSWAP         0x0300
-#define ColorFormatWSWAP         0x0c00
+#endif
+#define ColorFormatBSWAP         0x04
+#define ColorFormatWSWAP         0x08
+#if 0
 #define ColorFormatEvenMask      0x050f
 #define ColorFormatOddMask       0x0af0
+#endif
 #define ColorFormatGamma         0x1000
 #endif

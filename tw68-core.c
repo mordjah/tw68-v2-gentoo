@@ -265,6 +265,9 @@ EXPORT_SYMBOL(tw68_risc_program_dump);
  * tw68_risc_stopper
  * 	The 'risc_stopper' acts as a switch to direct the risc code
  * 	to the buffer at the head of the chain of active buffers.
+ *
+ * 	For the initial implementation, the "stopper" program is a
+ * 	simple jump-to-self.
  */
 int tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc)
 {
@@ -278,6 +281,7 @@ int tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc)
 	rp = risc->cpu;
 	*(rp++) = cpu_to_le32(RISC_JUMP);
 	*(rp++) = cpu_to_le32(risc->dma);
+	risc->jmp = risc->cpu;
 	return 0;
 }
 EXPORT_SYMBOL(tw68_risc_stopper);
@@ -357,7 +361,8 @@ printk(KERN_DEBUG "%s: count is %d, buf->count is %d\n",
 void tw68_shutdown(struct tw68_core *core)
 {
 	/* disable RISC controller + interrupts */
-	tw_clear(TW68_DMAC, 0x03);
+	tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+	core->pci_irqmask &= ~TW68_VID_INTS;
 	tw_write(TW68_INTMASK, 0x0);
 }
 
@@ -429,10 +434,12 @@ static unsigned int inline norm_htotal(v4l2_std_id norm)
 				((fsc4+262)/525*1001+15000)/30000;
 }
 
+#if 0
 static unsigned int inline norm_vbipack(v4l2_std_id norm)
 {
 	return (norm & V4L2_STD_625_50) ? 511 : 400;
 }
+#endif
 
 int tw68_set_scale(struct tw68_core *core, unsigned int width, unsigned int height,
 		   enum v4l2_field field)
@@ -444,10 +451,10 @@ int tw68_set_scale(struct tw68_core *core, unsigned int width, unsigned int heig
 	u32 value;
 	u32 comb_val;
 
-	dprintk(2, "set_scale: %dx%d [%s%s,%s]\n", width, height,
+	dprintk(2, "set_scale: %dx%d [%s%s,%s] scaled %dx%d\n", width, height,
 		V4L2_FIELD_HAS_TOP(field)    ? "T" : "",
 		V4L2_FIELD_HAS_BOTTOM(field) ? "B" : "",
-		v4l2_norm_to_name(core->tvnorm));
+		v4l2_norm_to_name(core->tvnorm), swidth, sheight);
 	if (!V4L2_FIELD_HAS_BOTH(field))
 		height *= 2;
 
@@ -486,6 +493,8 @@ int tw68_set_scale(struct tw68_core *core, unsigned int width, unsigned int heig
 	comb_val |= (value & 0xf00) >> 4;
 	tw_write(TW68_VSCALE_LO, value & 0xff);
 	tw_write(TW68_SCALE_HI, comb_val);
+printk(KERN_DEBUG "hscaleLo=%d, vscaleLo=%d, comb=%d(0x%04x)\n",
+   (swidth*256)/width, value, comb_val, comb_val);
 
 #if 0
 	/* todo -  setup filters */
@@ -510,8 +519,6 @@ int tw68_set_scale(struct tw68_core *core, unsigned int width, unsigned int heig
 
 	return 0;
 }
-
-static const u32 xtal = 28636363;
 
 int tw68_set_tvnorm(struct tw68_core *core, v4l2_std_id norm)
 {

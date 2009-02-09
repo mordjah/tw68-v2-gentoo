@@ -122,11 +122,9 @@ struct tw68_ctrl {
 	struct v4l2_queryctrl  v;
 	u32			off;
 	u32			reg;
-	u32			sreg;
 	u32			mask;
 	u32			shift;
 	u32			reg2;
-	u32			sreg2;
 	u32			mask2;
 	u32			shift2;
 };
@@ -208,6 +206,11 @@ struct tw68_subid {
 };
 
 #define INPUT(nr) (core->board.input[nr])
+
+/* ----------------------------------------------------------- */
+/* Interrupts enabled and handled by the video module          */
+#define	TW68_VID_INTS	(TW68_PABORT | TW68_DMAPERR | TW68_FDMIS | \
+			 TW68_FFOF | TW68_DMAPI)
 
 /* ----------------------------------------------------------- */
 /* device / file handle status                                 */
@@ -434,7 +437,6 @@ struct cx6802_dev {
 
 #define tw_read(reg)             readl(core->lmmio + ((reg)>>2))
 #define tw_write(reg,value)      writel((value), core->lmmio + ((reg)>>2))
-#define tw_writeb(reg,value)     writeb((value), core->bmmio + (reg))
 
 #define tw_andor(reg,mask,value) \
   writel((readl(core->lmmio+((reg)>>2)) & ~(mask)) |\
@@ -443,15 +445,6 @@ struct cx6802_dev {
 #define tw_clear(reg,bit)        tw_andor((reg),(bit),0)
 
 #define tw_wait(d) { if (need_resched()) schedule(); else udelay(d); }
-
-/* shadow registers */
-#define tw_sread(sreg)		    (core->shadow[sreg])
-#define tw_swrite(sreg,reg,value) \
-  (core->shadow[sreg] = value, \
-   writel(core->shadow[sreg], core->lmmio + ((reg)>>2)))
-#define tw_sandor(sreg,reg,mask,value) \
-  (core->shadow[sreg] = (core->shadow[sreg] & ~(mask)) | ((value) & (mask)), \
-   writel(core->shadow[sreg], core->lmmio + ((reg)>>2)))
 
 /* ----------------------------------------------------------- */
 /* tw68-core.c                                                 */

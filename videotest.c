@@ -51,6 +51,13 @@ static int xioctl(int fd, int request, void *arg)
 
 static void process_image(const void *p)
 {
+int *pint = (int *)p;
+if (*pint == 0)
+  printf("zero data\n");
+else {
+  printf(" %x", *pint);
+  *pint = 0;
+}
     fputc('.', stdout);
     fflush(stdout);
 }
@@ -243,6 +250,7 @@ static void init_read(unsigned int buffer_size)
 	fprintf(stderr, "Out of memory\n");
 	exit(EXIT_FAILURE);
     }
+memset(buffers[0].start, 0, buffer_size);
 }
 
 static void init_mmap(void)
@@ -498,6 +506,7 @@ int main(int argc, char **argv)
     stop_capturing();
     uninit_device();
     close_device();
+    fputc('\n', stdout);
     exit(EXIT_SUCCESS);
     return 0;
 }
