@@ -94,20 +94,6 @@ enum tw68_board_type {
 };
 
 /* ----------------------------------------------------------- */
-/* tv norms                                                    */
-
-static unsigned int inline norm_maxw(v4l2_std_id norm)
-{
-	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 720 : 768;
-}
-
-
-static unsigned int inline norm_maxh(v4l2_std_id norm)
-{
-	return (norm & V4L2_STD_625_50) ? 576 : 480;
-}
-
-/* ----------------------------------------------------------- */
 /* static data                                                 */
 
 struct tw6800_fmt {
@@ -128,34 +114,6 @@ struct tw68_ctrl {
 	u32			mask2;
 	u32			shift2;
 };
-
-/* ----------------------------------------------------------- */
-#if 0
-/* SRAM memory management data (see tw68-core.c)               */
-
-#define SRAM_CH21 0   /* video */
-#define SRAM_CH22 1
-#define SRAM_CH23 2
-#define SRAM_CH24 3   /* vbi   */
-#define SRAM_CH25 4   /* audio */
-#define SRAM_CH26 5
-#define SRAM_CH28 6   /* mpeg */
-/* more */
-
-struct sram_channel {
-	char *name;
-	u32  cmds_start;
-	u32  ctrl_start;
-	u32  cdt;
-	u32  fifo_start;
-	u32  fifo_size;
-	u32  ptr1_reg;
-	u32  ptr2_reg;
-	u32  cnt1_reg;
-	u32  cnt2_reg;
-};
-extern struct sram_channel tw68_sram_channels[];
-#endif
 
 /* ----------------------------------------------------------- */
 /* card configuration                                          */
@@ -320,7 +278,8 @@ struct tw6800_fh {
 
 	/* video capture */
 	struct tw6800_fmt          *fmt;
-	unsigned int               width,height;
+	unsigned int               width;
+	unsigned int		   height;
 	struct videobuf_queue      vidq;
 
 	/* vbi capture */
@@ -357,6 +316,7 @@ struct tw6800_dev {
 	struct tw6800_suspend_state state;
 };
 
+#if 0
 /* ----------------------------------------------------------- */
 /* function 1: audio/alsa stuff                                */
 /* =============> moved to tw68-alsa.c <====================== */
@@ -432,19 +392,25 @@ struct cx6802_dev {
 	struct list_head	   drvlist;
 	struct work_struct	   request_module_wk;
 };
+#endif
 
 /* ----------------------------------------------------------- */
+/* TODO - probably should use byte access for non-PCI regs     */
+#define tw_readl(reg)             readl(core->lmmio + ((reg)>>2))
+#define	tw_readb(reg)		 readb(core->bmmio + (reg))
+#define tw_writel(reg,value)      writel((value), core->lmmio + ((reg)>>2))
+#define	tw_writeb(reg,value)	 writeb((value), core->bmmio + (reg))
 
-#define tw_read(reg)             readl(core->lmmio + ((reg)>>2))
-#define tw_write(reg,value)      writel((value), core->lmmio + ((reg)>>2))
-
-#define tw_andor(reg,mask,value) \
+#define tw_andorl(reg,mask,value) \
   writel((readl(core->lmmio+((reg)>>2)) & ~(mask)) |\
   ((value) & (mask)), core->lmmio+((reg)>>2))
-#define tw_set(reg,bit)          tw_andor((reg),(bit),(bit))
-#define tw_clear(reg,bit)        tw_andor((reg),(bit),0)
-
-#define tw_wait(d) { if (need_resched()) schedule(); else udelay(d); }
+#define	tw_andorb(reg,mask,value) \
+  writeb((readb(core->bmmio+(reg)) & ~(mask)) |\
+  ((value) & (mask)), core->bmmio+(reg))
+#define tw_setl(reg,bit)          tw_andorl((reg),(bit),(bit))
+#define	tw_setb(reg,bit)	  tw_andorb((reg),(bit),(bit))
+#define tw_clearl(reg,bit)        tw_andorl((reg),(bit),0)
+#define	tw_clearb(reg,bit)	  tw_andorl((reg),(bit),0)
 
 /* ----------------------------------------------------------- */
 /* tw68-core.c                                                 */
@@ -558,6 +524,7 @@ void tw68_get_stereo(struct tw68_core *core, struct v4l2_tuner *t);
 void tw68_set_stereo(struct tw68_core *core, u32 mode, int manual);
 int tw68_audio_thread(void *data);
 
+#if 0
 int cx6802_register_driver(struct cx6802_driver *drv);
 int cx6802_unregister_driver(struct cx6802_driver *drv);
 struct cx6802_dev * cx6802_get_device(struct inode *inode);
@@ -579,6 +546,7 @@ int cx6802_buf_prepare(struct videobuf_queue *q,struct cx6802_dev *dev,
 			struct tw68_buffer *buf, enum v4l2_field field);
 void cx6802_buf_queue(struct cx6802_dev *dev, struct tw68_buffer *buf);
 void cx6802_cancel_buffers(struct cx6802_dev *dev);
+#endif
 
 /* ----------------------------------------------------------- */
 /* tw68-video.c*/

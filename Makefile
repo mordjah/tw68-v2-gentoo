@@ -1,4 +1,4 @@
-tw6800-objs	:= tw68-core.o tw68-video.o tw68-cards.o
+tw6800-objs	:= tw68-core.o tw68-video.o tw68-cards.o tw68-i2c.o
 
 obj-m += tw6800.o
 

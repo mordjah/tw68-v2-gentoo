@@ -118,7 +118,7 @@ static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
 			 */
 			todo = bpl;	/* one full line to be done */
 			/* first fragment */
-			*(rp++) = cpu_to_le32(RISC_LINESTART |
+			*(rp++) = cpu_to_le32(RISC_LINESTART | (7 << 24) |
 					(offset<<12) |
 					(sg_dma_len(sg) - offset));
 			*(rp++) = cpu_to_le32(sg_dma_address(sg) + offset);
@@ -191,6 +191,7 @@ int tw68_risc_buffer(struct pci_dev *pci, struct btcx_riscmem *risc,
 	if ((rc = btcx_riscmem_alloc(pci,risc,instructions*8)) < 0)
 		return rc;
 
+printk(KERN_DEBUG "%s: setting up buffer 0x%08x\n", __func__, (u32)risc->dma);
 	/* write risc instructions */
 	rp = risc->cpu;
 	if (UNSET != top_offset)	/* generates SYNCO */
@@ -312,7 +313,6 @@ void tw68_wakeup(struct tw68_core *core,
 #if 0
 	int bc;
 
-printk(KERN_DEBUG "Entered %s\n", __func__);
 	for (bc = 0;; bc++) {
 		if (list_empty(&q->active))
 {
@@ -361,16 +361,16 @@ printk(KERN_DEBUG "%s: count is %d, buf->count is %d\n",
 void tw68_shutdown(struct tw68_core *core)
 {
 	/* disable RISC controller + interrupts */
-	tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+	tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 	core->pci_irqmask &= ~TW68_VID_INTS;
-	tw_write(TW68_INTMASK, 0x0);
+	tw_writel(TW68_INTMASK, 0x0);
 }
 
 int tw68_reset(struct tw68_core *core)
 {
 	tw68_shutdown(core);
 
-	tw_write(TW68_ACNTL, 0x80);
+	tw_writeb(TW68_ACNTL, 0x80);
 	/* wait a bit */
 	msleep(100);
 
@@ -383,223 +383,6 @@ int tw68_reset(struct tw68_core *core)
 	 *	color control
 	 */
 
-	return 0;
-}
-
-/* ------------------------------------------------------------------ */
-
-static unsigned int inline norm_swidth(v4l2_std_id norm)
-{
-	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 754 : 922;
-}
-
-static unsigned int inline norm_hdelay(v4l2_std_id norm)
-{
-	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 135 : 186;
-}
-
-static unsigned int inline norm_vdelay(v4l2_std_id norm)
-{
-	return (norm & V4L2_STD_625_50) ? 0x24 : 0x18;
-}
-
-static unsigned int inline norm_fsc8(v4l2_std_id norm)
-{
-	if (norm & V4L2_STD_PAL_M)
-		return 28604892;      // 3.575611 MHz
-
-	if (norm & (V4L2_STD_PAL_Nc))
-		return 28656448;      // 3.582056 MHz
-
-	if (norm & V4L2_STD_NTSC) // All NTSC/M and variants
-		return 28636360;      // 3.57954545 MHz +/- 10 Hz
-
-	/* SECAM have also different sub carrier for chroma,
-	   but step_db and step_dr, at tw68_set_tvnorm already handles that.
-
-	   The same FSC applies to PAL/BGDKIH, PAL/60, NTSC/4.43 and PAL/N
-	 */
-
-	return 35468950;      // 4.43361875 MHz +/- 5 Hz
-}
-
-static unsigned int inline norm_htotal(v4l2_std_id norm)
-{
-
-	unsigned int fsc4=norm_fsc8(norm)/2;
-
-	/* returns 4*FSC / vtotal / frames per seconds */
-	return (norm & V4L2_STD_625_50) ?
-				((fsc4+312)/625+12)/25 :
-				((fsc4+262)/525*1001+15000)/30000;
-}
-
-#if 0
-static unsigned int inline norm_vbipack(v4l2_std_id norm)
-{
-	return (norm & V4L2_STD_625_50) ? 511 : 400;
-}
-#endif
-
-int tw68_set_scale(struct tw68_core *core, unsigned int width, unsigned int height,
-		   enum v4l2_field field)
-{
-	unsigned int swidth  = norm_swidth(core->tvnorm);
-	unsigned int sheight = norm_maxh(core->tvnorm);
-
-	/* FIXME - Should values be u8? */
-	u32 value;
-	u32 comb_val;
-
-	dprintk(2, "set_scale: %dx%d [%s%s,%s] scaled %dx%d\n", width, height,
-		V4L2_FIELD_HAS_TOP(field)    ? "T" : "",
-		V4L2_FIELD_HAS_BOTTOM(field) ? "B" : "",
-		v4l2_norm_to_name(core->tvnorm), swidth, sheight);
-	if (!V4L2_FIELD_HAS_BOTH(field))
-		height *= 2;
-
-	// recalc H/V active and delay registers
-	// FIXME - check why and with 0xfe
-
-	comb_val = (width & 0x300) >> 8;
-	tw_write(TW68_HACTIVE_LO, width & 0xff);
-	value = (width * norm_hdelay(core->tvnorm)) / swidth;
-	comb_val |= (value & 0x300) >> 6;
-	tw_write(TW68_HDELAY_LO, value & 0xfe);
-
-	comb_val = (sheight & 0x300) >> 4;
-	tw_write(TW68_VACTIVE_LO, sheight & 0xff);
-	value = norm_vdelay(core->tvnorm);
-	comb_val |= (value & 0x300) >> 2;
-	tw_write(TW68_VDELAY_LO, value & 0xff);
-
-	tw_write(TW68_CROP_HI, comb_val);
-
-#if 0
-	value = (swidth * 4096 / width) - 4096;
-	comb_val = value >> 8;
-	tw_write(TW68_HSCALE_LO, value & 0xff);
-	printk(KERN_DEBUG "set_scale: hscale  0x%04x\n", value);
-	value = (0x10000 - (sheight * 512 / height - 512)) & 0x1fff;
-	comb_val |= (value & 0xf00) >> 4;
-	tw_write(TW68_VSCALE_LO, value & 0xff);
-	printk(KERN_DEBUG "set_scale: vscale  0x%04x\n", value);
-#endif
-	value = (swidth * 256) / width;
-	comb_val = value >> 8;
-	tw_write(TW68_HSCALE_LO, value & 0xff);
-
-	value = (sheight * 256) / height;
-	comb_val |= (value & 0xf00) >> 4;
-	tw_write(TW68_VSCALE_LO, value & 0xff);
-	tw_write(TW68_SCALE_HI, comb_val);
-printk(KERN_DEBUG "hscaleLo=%d, vscaleLo=%d, comb=%d(0x%04x)\n",
-   (swidth*256)/width, value, comb_val, comb_val);
-
-#if 0
-	/* todo -  setup filters */
-	value = (1 << 19);        // CFILT (default)
-	if (core->tvnorm & V4L2_STD_SECAM) {
-		value |= (1 << 15);
-		value |= (1 << 16);
-	}
-	if (INPUT(core->input).type == TW68_VMUX_SVIDEO)
-		value |= (1 << 13) | (1 << 5);
-	if (V4L2_FIELD_INTERLACED == field)
-		value |= (1 << 3); // VINT (interlaced vertical scaling)
-	if (width < 385)
-		value |= (1 << 0); // 3-tap interpolation
-	if (width < 193)
-		value |= (1 << 1); // 5-tap interpolation
-	if (nocomb)
-		value |= (3 << 5); // disable comb filter
-
-	printk(KERN_DEBUG "set_scale: filter  0x%04x\n", value);
-#endif
-
-	return 0;
-}
-
-int tw68_set_tvnorm(struct tw68_core *core, v4l2_std_id norm)
-{
-	u32 twiformat;
-
-printk(KERN_DEBUG "Entered %s\n", __func__);
-	core->tvnorm = norm;
-
-	if (norm & V4L2_STD_NTSC_M_JP) {
-		twiformat = VideoFormatNTSCJapan;
-	} else if (norm & V4L2_STD_NTSC_443) {
-		twiformat = VideoFormatNTSC443;
-	} else if (norm & V4L2_STD_PAL_M) {
-		twiformat = VideoFormatPALM;
-	} else if (norm & V4L2_STD_PAL_N) {
-		twiformat = VideoFormatPALN;
-	} else if (norm & V4L2_STD_PAL_Nc) {
-		twiformat = VideoFormatPALNC;
-	} else if (norm & V4L2_STD_PAL_60) {
-		twiformat = VideoFormatPAL60;
-	} else if (norm & V4L2_STD_NTSC) {
-		twiformat = VideoFormatNTSC;
-	} else if (norm & V4L2_STD_SECAM) {
-		twiformat = VideoFormatSECAM;
-	} else { /* PAL */
-		twiformat = VideoFormatPAL;
-	}
-
-	printk(KERN_DEBUG "set_tvnorm: TW68_SDT  0x%08x [old=0x%08x]\n",
-		twiformat, (tw_read(TW68_SDT) >> 4) & 0x07);
-
-	tw_andor(TW68_SDT, 0x07, twiformat);
-
-#if 0
-	// FIXME: as-is from DScaler
-	printk(KERN_DEBUG "set_tvnorm: MO_OUTPUT_FORMAT 0x%08x [old=0x%08x]\n",
-		twoformat, tw_read(MO_OUTPUT_FORMAT));
-//	tw_write(MO_OUTPUT_FORMAT, twoformat);
-
-	// MO_SCONV_REG = adc clock / video dec clock * 2^17
-	tmp64  = adc_clock * (u64)(1 << 17);
-	do_div(tmp64, vdec_clock);
-	printk(KERN_DEBUG "set_tvnorm: MO_SCONV_REG     0x%08x [old=0x%08x]\n",
-		(u32)tmp64, tw_read(MO_SCONV_REG));
-	tw_write(MO_SCONV_REG, (u32)tmp64);
-
-	// MO_SUB_STEP = 8 * fsc / video dec clock * 2^22
-	tmp64  = step_db * (u64)(1 << 22);
-	do_div(tmp64, vdec_clock);
-	printk(KERN_DEBUG "set_tvnorm: MO_SUB_STEP      0x%08x [old=0x%08x]\n",
-		(u32)tmp64, tw_read(MO_SUB_STEP));
-	tw_write(MO_SUB_STEP, (u32)tmp64);
-
-	// MO_SUB_STEP_DR = 8 * 4406250 / video dec clock * 2^22
-	tmp64  = step_dr * (u64)(1 << 22);
-	do_div(tmp64, vdec_clock);
-	printk(KERN_DEBUG "set_tvnorm: MO_SUB_STEP_DR   0x%08x [old=0x%08x]\n",
-		(u32)tmp64, tw_read(MO_SUB_STEP_DR));
-	tw_write(MO_SUB_STEP_DR, (u32)tmp64);
-
-	// bdelay + agcdelay
-	bdelay   = vdec_clock * 65 / 20000000 + 21;
-	agcdelay = vdec_clock * 68 / 20000000 + 15;
-	printk(KERN_DEBUG "set_tvnorm: MO_AGC_BURST     0x%08x [old=0x%08x,bdelay=%d,agcdelay=%d]\n",
-		(bdelay << 8) | agcdelay, tw_read(MO_AGC_BURST), bdelay, agcdelay);
-	tw_write(MO_AGC_BURST, (bdelay << 8) | agcdelay);
-
-	// htotal
-	tmp64 = norm_htotal(norm) * (u64)vdec_clock;
-	do_div(tmp64, fsc8);
-	htotal = (u32)tmp64 | (HLNotchFilter4xFsc << 11);
-	printk(KERN_DEBUG "set_tvnorm: MO_HTOTAL        0x%08x [old=0x%08x,htotal=%d]\n",
-		htotal, tw_read(MO_HTOTAL), (u32)tmp64);
-	tw_write(MO_HTOTAL, htotal);
-
-#endif
-
-	// this is needed as well to set all tvnorm parameter
-	tw68_set_scale(core, 320, 240, V4L2_FIELD_INTERLACED);
-
-	// done
 	return 0;
 }
 
@@ -680,9 +463,6 @@ EXPORT_SYMBOL(tw68_shutdown);
 
 EXPORT_SYMBOL(tw68_risc_buffer);
 EXPORT_SYMBOL(tw68_free_buffer);
-
-EXPORT_SYMBOL(tw68_set_tvnorm);
-EXPORT_SYMBOL(tw68_set_scale);
 
 EXPORT_SYMBOL(tw68_vdev_init);
 EXPORT_SYMBOL(tw68_core_get);

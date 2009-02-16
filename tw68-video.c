@@ -81,6 +81,12 @@ static LIST_HEAD(tw6800_devlist);
 /* ------------------------------------------------------------------- */
 /* static data                                                         */
 
+/*
+ * The TW6801 video block supports the following formats:
+ *	RGB32 RGB24 RGB16 RGB15 YUY2
+ * Additionally, the four bytes of DWORDs containing the pixels can be
+ * swapped in various manners.
+ */
 static struct tw6800_fmt formats[] = {
 	{	/* TODO - confirm the next two aren't reversed */
 		.name     = "32 bpp RGB, le",
@@ -125,6 +131,7 @@ static struct tw6800_fmt formats[] = {
 		.twformat = ColorFormatRGB15 | ColorFormatBSWAP,
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
+#if 0
 	},{
 		.name     = "4:2:2, packed, YUYV",
 		.fourcc   = V4L2_PIX_FMT_YUYV,
@@ -137,6 +144,7 @@ static struct tw6800_fmt formats[] = {
 		.twformat = ColorFormatYUY2 | ColorFormatBSWAP,
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
+#endif
 	},
 };
 
@@ -267,6 +275,320 @@ static const u32 *ctrl_classes[] = {
 	NULL
 };
 
+/* ----------------------------------------------------------- */
+/* Debugging code                                              */
+
+static void dump_vregs (int start, int end, struct tw68_core *core)
+{
+	int ix, nchar, pos;
+	char line[80];
+
+	pos = 0;
+	nchar = 0;
+	for (ix = start; ix < end; ix += 4) {
+		if (nchar == 0)
+			pos = snprintf (line, 10, "0x%04x   ", ix);
+		snprintf (&line[pos + nchar], 4, "%02x ", tw_readb(ix));
+		nchar += 3;
+		if (nchar >= 48) {
+			printk("%s\n", line);
+			nchar = 0;
+		}
+	}
+	if (nchar)
+		printk("%s\n", line);
+}
+
+static void dump_pci_regs (int start, int end, struct tw68_core *core)
+{
+	int ix, nchar, pos;
+	char line[80];
+
+	pos = 0;
+	nchar = 0;
+	for (ix = start; ix < end; ix += 4) {
+		if (nchar == 0)
+			pos = snprintf (line, 10, "0x%04x   ", ix);
+		snprintf (&line[pos + nchar], 10, "%08x ", tw_readl(ix));
+		nchar += 9;
+		if (nchar >= 72) {
+			printk("%s\n", line);
+			nchar = 0;
+		}
+	}
+	if (nchar)
+		printk("%s\n", line);
+}
+/* ----------------------------------------------------------- */
+/* tv norms                                                    */
+
+/*
+ * Normal vs. square-pixel
+ */
+static unsigned int inline norm_maxw(v4l2_std_id norm)
+{
+	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 720 : 768;
+}
+
+/*
+ * Number of scan lines per frame
+ * 60Hz vs. 50Hz
+ */
+static unsigned int inline norm_maxh(v4l2_std_id norm)
+{
+	return (norm & V4L2_STD_625_50) ? 288 : 240;
+}
+
+/*
+ * norm_hdelay
+ *
+ * 	Produces the number of pixels to be skipped before the "active"
+ * 	area.
+ *
+ * 	@norm		v4l2 norm in use
+ */
+static unsigned int inline norm_hdelay(v4l2_std_id norm)
+{
+	return (norm & V4L2_STD_NTSC) ? 106 : 108;
+//	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 106 : 108;
+}
+
+/*
+ * norm_vdelay
+ * 
+ * 	Produces the number of scan lines to be skipped before the "active"
+ * 	area.
+ *
+ * 	@norm		v4l2 norm in use
+ */
+static unsigned int inline norm_vdelay(v4l2_std_id norm)
+{
+	return (norm & V4L2_STD_625_50) ? 0x24 : 0x18;
+}
+
+#if 0
+static unsigned int inline norm_fsc8(v4l2_std_id norm)
+{
+	if (norm & V4L2_STD_PAL_M)
+		return 28604892;      // 3.575611 MHz
+
+	if (norm & (V4L2_STD_PAL_Nc))
+		return 28656448;      // 3.582056 MHz
+
+	if (norm & V4L2_STD_NTSC) // All NTSC/M and variants
+		return 28636360;      // 3.57954545 MHz +/- 10 Hz
+
+	/* SECAM have also different sub carrier for chroma,
+	   but step_db and step_dr, at tw68_set_tvnorm already handles that.
+
+	   The same FSC applies to PAL/BGDKIH, PAL/60, NTSC/4.43 and PAL/N
+	 */
+
+	return 35468950;      // 4.43361875 MHz +/- 5 Hz
+}
+
+static unsigned int inline norm_htotal(v4l2_std_id norm)
+{
+
+	unsigned int fsc4=norm_fsc8(norm)/2;
+
+	/* returns 4*FSC / vtotal / frames per seconds */
+	return (norm & V4L2_STD_625_50) ?
+				((fsc4+312)/625+12)/25 :
+				((fsc4+262)/525*1001+15000)/30000;
+}
+
+
+static unsigned int inline norm_vbipack(v4l2_std_id norm)
+{
+	return (norm & V4L2_STD_625_50) ? 511 : 400;
+}
+#endif
+
+/*
+ * tw68_set_scale
+ *
+ * Scaling and Cropping for video decoding
+ *
+ * We are working with 3 values for horizontal and vertical - scale,
+ * delay and active.  The TW6802 datasheet says the unscaled image is:
+ * 		Total pixels	HDELAY	HACTIVE
+ * 	NTSC	   858		  106	  720
+ * 	PAL	   864		  108	  720
+ *
+ * HACTIVE represent the actual number of pixels in the "usable" image,
+ * before scaling.  HDELAY represents the number of pixels skipped
+ * between the start of the horizontal sync and the start of the image.
+ * HSCALE is calculated using the formula
+ * 	HSCALE = (720 / HACTIVE) * 256
+ *
+ * The vertical registers are similar, except based upon the total number
+ * of lines in the image, and the first line of the image (i.e. ignoring
+ * vertical sync and VBI).
+ *
+ * Note that the number of bytes reaching the FIFO (and hence needing
+ * to be processed by the DMAP program) is completely dependent upon
+ * these values, especially HSCALE.
+ *
+ * Parameters:
+ * 	@core		pointer to the core structure, needed for
+ * 			getting current norm (as well as debug print)
+ * 	@width		actual image width (from user buffer)
+ * 	@height		actual image height
+ * 	@field		indicates Top, Bottom or Interlaced
+ */
+int tw68_set_scale(struct tw68_core *core, unsigned int width,
+		unsigned int height, enum v4l2_field field)
+{
+
+	/* set indidually for debugging clarity */
+	int hactive, hdelay, hscale;
+	int vactive, vdelay, vscale;
+	int comb;
+
+	if (!V4L2_FIELD_HAS_BOTH(field))
+		height *= 2;
+
+	hactive = norm_maxw(core->tvnorm);
+	hdelay = norm_hdelay(core->tvnorm);
+	hscale = (hactive * 256) / width;
+
+	vactive = norm_maxh(core->tvnorm);
+	vdelay = norm_vdelay(core->tvnorm);
+	vscale = (vactive * 256) / height;
+
+	dprintk(2, "set_scale: %dx%d [%s%s,%s]\n", width, height,
+		V4L2_FIELD_HAS_TOP(field)    ? "T" : "",
+		V4L2_FIELD_HAS_BOTTOM(field) ? "B" : "",
+		v4l2_norm_to_name(core->tvnorm));
+	dprintk(2, "set_scale: hactive=%d, hdelay=%d, hscale=%d; "
+		   "vactive=%d, vdelay=%d, vscale=%d\n",
+		   hactive, hdelay, hscale, vactive, vdelay, vscale);
+
+	comb =	((vdelay & 0x300)  >> 2) |
+		((vactive & 0x300) >> 4) |
+		((hdelay & 0x300)  >> 6) |
+		((hactive & 0x300) >> 8);	
+	tw_writeb(TW68_CROP_HI, comb);
+	tw_writeb(TW68_VDELAY_LO, vdelay & 0xff);
+	tw_writeb(TW68_VACTIVE_LO, vactive & 0xff);
+	tw_writeb(TW68_HDELAY_LO, hdelay & 0xff);
+	tw_writeb(TW68_HACTIVE_LO, hactive & 0xff);
+
+	comb = ((vscale & 0xf00) >> 4) | ((hscale & 0xf00) >> 8);
+	tw_writeb(TW68_SCALE_HI, comb);
+	tw_writeb(TW68_VSCALE_LO, vscale);
+	tw_writeb(TW68_HSCALE_LO, hscale);
+
+#if 0
+	/* todo -  setup filters */
+	value = (1 << 19);        // CFILT (default)
+	if (core->tvnorm & V4L2_STD_SECAM) {
+		value |= (1 << 15);
+		value |= (1 << 16);
+	}
+	if (INPUT(core->input).type == TW68_VMUX_SVIDEO)
+		value |= (1 << 13) | (1 << 5);
+	if (V4L2_FIELD_INTERLACED == field)
+		value |= (1 << 3); // VINT (interlaced vertical scaling)
+	if (width < 385)
+		value |= (1 << 0); // 3-tap interpolation
+	if (width < 193)
+		value |= (1 << 1); // 5-tap interpolation
+	if (nocomb)
+		value |= (3 << 5); // disable comb filter
+
+	printk(KERN_DEBUG "set_scale: filter  0x%04x\n", value);
+#endif
+
+	return 0;
+}
+EXPORT_SYMBOL(tw68_set_scale);
+
+int tw68_set_tvnorm(struct tw68_core *core, v4l2_std_id norm)
+{
+	u32 twiformat;
+
+printk(KERN_DEBUG "Entered %s\n", __func__);
+	core->tvnorm = norm;
+
+	if (norm & V4L2_STD_NTSC_M_JP) {
+		twiformat = VideoFormatNTSCJapan;
+	} else if (norm & V4L2_STD_NTSC_443) {
+		twiformat = VideoFormatNTSC443;
+	} else if (norm & V4L2_STD_PAL_M) {
+		twiformat = VideoFormatPALM;
+	} else if (norm & V4L2_STD_PAL_N) {
+		twiformat = VideoFormatPALN;
+	} else if (norm & V4L2_STD_PAL_Nc) {
+		twiformat = VideoFormatPALNC;
+	} else if (norm & V4L2_STD_PAL_60) {
+		twiformat = VideoFormatPAL60;
+	} else if (norm & V4L2_STD_NTSC) {
+		twiformat = VideoFormatNTSC;
+	} else if (norm & V4L2_STD_SECAM) {
+		twiformat = VideoFormatSECAM;
+	} else { /* PAL */
+		twiformat = VideoFormatPAL;
+	}
+
+printk(KERN_DEBUG "set_tvnorm: TW68_SDT  0x%08x [old=0x%08x]\n",
+twiformat, (tw_readb(TW68_SDT) >> 4) & 0x07);
+
+	tw_andorb(TW68_SDT, 0x07, twiformat);
+
+#if 0
+	// FIXME: as-is from DScaler
+	printk(KERN_DEBUG "set_tvnorm: MO_OUTPUT_FORMAT 0x%08x [old=0x%08x]\n",
+		twoformat, tw_read(MO_OUTPUT_FORMAT));
+//	tw_write(MO_OUTPUT_FORMAT, twoformat);
+
+	// MO_SCONV_REG = adc clock / video dec clock * 2^17
+	tmp64  = adc_clock * (u64)(1 << 17);
+	do_div(tmp64, vdec_clock);
+	printk(KERN_DEBUG "set_tvnorm: MO_SCONV_REG     0x%08x [old=0x%08x]\n",
+		(u32)tmp64, tw_read(MO_SCONV_REG));
+	tw_write(MO_SCONV_REG, (u32)tmp64);
+
+	// MO_SUB_STEP = 8 * fsc / video dec clock * 2^22
+	tmp64  = step_db * (u64)(1 << 22);
+	do_div(tmp64, vdec_clock);
+	printk(KERN_DEBUG "set_tvnorm: MO_SUB_STEP      0x%08x [old=0x%08x]\n",
+		(u32)tmp64, tw_read(MO_SUB_STEP));
+	tw_write(MO_SUB_STEP, (u32)tmp64);
+
+	// MO_SUB_STEP_DR = 8 * 4406250 / video dec clock * 2^22
+	tmp64  = step_dr * (u64)(1 << 22);
+	do_div(tmp64, vdec_clock);
+	printk(KERN_DEBUG "set_tvnorm: MO_SUB_STEP_DR   0x%08x [old=0x%08x]\n",
+		(u32)tmp64, tw_read(MO_SUB_STEP_DR));
+	tw_write(MO_SUB_STEP_DR, (u32)tmp64);
+
+	// bdelay + agcdelay
+	bdelay   = vdec_clock * 65 / 20000000 + 21;
+	agcdelay = vdec_clock * 68 / 20000000 + 15;
+	printk(KERN_DEBUG "set_tvnorm: MO_AGC_BURST     0x%08x [old=0x%08x,bdelay=%d,agcdelay=%d]\n",
+		(bdelay << 8) | agcdelay, tw_read(MO_AGC_BURST), bdelay, agcdelay);
+	tw_write(MO_AGC_BURST, (bdelay << 8) | agcdelay);
+
+	// htotal
+	tmp64 = norm_htotal(norm) * (u64)vdec_clock;
+	do_div(tmp64, fsc8);
+	htotal = (u32)tmp64 | (HLNotchFilter4xFsc << 11);
+	printk(KERN_DEBUG "set_tvnorm: MO_HTOTAL        0x%08x [old=0x%08x,htotal=%d]\n",
+		htotal, tw_read(MO_HTOTAL), (u32)tmp64);
+	tw_write(MO_HTOTAL, htotal);
+
+#endif
+
+	// this is needed as well to set all tvnorm parameter
+	tw68_set_scale(core, 320, 240, V4L2_FIELD_INTERLACED);
+
+	// done
+	return 0;
+}
+EXPORT_SYMBOL(tw68_set_tvnorm);
+
 int tw6800_ctrl_query(struct tw68_core *core, struct v4l2_queryctrl *qctrl)
 {
 	int i;
@@ -354,13 +676,13 @@ int tw68_video_mux(struct tw68_core *core, unsigned int input)
  * As a first try, we will do the minimum - position the input value
  * into position for setting into the INFORM register
  */
-printk(KERN_DEBUG  "Entered %s, INFORM=%02x\n", __func__, tw_read(TW68_INFORM));
+printk(KERN_DEBUG  "Entered %s, INFORM=%02x\n", __func__, tw_readb(TW68_INFORM));
 	if (input > 3)
 		return -EINVAL;
 	core->input = input;	/* save the value into control struct */
 	dprintk(1, "tw6800: video_mux: input=%d\n", input);
 	input <<= 2;	/* position value into b3-2 */
-	tw_andor(TW68_INFORM, 0x03 << 2, input);
+	tw_andorb(TW68_INFORM, 0x03 << 2, input);
 
 	return 0;
 }
@@ -377,14 +699,15 @@ static int start_video_dma(struct tw6800_dev    *dev,
 
 	tw68_set_scale(core, buf->vb.width, buf->vb.height, buf->vb.field);
 	q->count = 1;
+printk(KERN_DEBUG "%s: Starting DMA for buffer 0x%08x\n", __func__, (u32)buf->risc.dma);
 	/* set risc starting address */
-	tw_write(TW68_DMAP_SA, cpu_to_le32(buf->risc.dma));
+	tw_writel(TW68_DMAP_SA, cpu_to_le32(buf->risc.dma));
 	/* start risc processor plus fifo and set format */
-	tw_andor(TW68_DMAC, 0x7f, buf->fmt->twformat |
+	tw_andorl(TW68_DMAC, 0x7f, buf->fmt->twformat |
 		 ColorFormatGamma | TW68_DMAP_EN | TW68_FIFO_EN);
 	/* enable irqs */
 	core->pci_irqmask |= TW68_VID_INTS;
-	tw_set(TW68_INTMASK, core->pci_irqmask);
+	tw_setl(TW68_INTMASK, core->pci_irqmask);
 	return 0;
 }
 
@@ -394,8 +717,8 @@ static int stop_video_dma(struct tw6800_dev    *dev)
 {
 	struct tw68_core *core = dev->core;
 	core->pci_irqmask &= ~TW68_VID_INTS;
-	tw_clear(TW68_INTMASK, TW68_VID_INTS);
-	tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+	tw_clearl(TW68_INTMASK, TW68_VID_INTS);
+	tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 	return 0;
 }
 #endif
@@ -519,6 +842,8 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 					 dma->sglist, 0, buf->bpl,
 					 buf->bpl, buf->bpl,
 					 buf->vb.height >> 1);
+if (!(buf->vb.i % 4))
+tw68_risc_program_dump(core, &buf->risc);
 			break;
 		case V4L2_FIELD_SEQ_TB:
 			tw68_risc_buffer(dev->pci, &buf->risc,
@@ -800,7 +1125,7 @@ int tw68_get_control (struct tw68_core  *core, struct v4l2_control *ctl)
 	if (unlikely(NULL == c))
 		return -EINVAL;
 #if 0
-	value = tw_read(c->reg);
+	value = tw_readb(c->reg);
 	switch (ctl->id) {
 	case V4L2_CID_AUDIO_BALANCE:
 		ctl->value = ((value & 0x7f) < 0x40) ?
@@ -816,10 +1141,10 @@ int tw68_get_control (struct tw68_core  *core, struct v4l2_control *ctl)
 		break;
 	}
 #endif
-	ctl->value = ((tw_read(c->reg) & c->mask) >> c->shift) + c->off;
+	ctl->value = ((tw_readb(c->reg) & c->mask) >> c->shift) + c->off;
 	if (c->reg2)
-		ctl->value +=
-		    ((tw_read(c->reg2) & c->mask2) >> c->shift2) << 8;
+		ctl->value |=
+		    ((tw_readb(c->reg2) & c->mask2) >> c->shift2) << 8;
 	dprintk(1,"get_control id=0x%X(%s) ctrl=0x%x,"
 		"reg=0x%02x (mask 0x%02x)\n",
 		ctl->id, c->v.name, ctl->value, c->reg, c->mask);
@@ -869,26 +1194,26 @@ int tw68_set_control(struct tw68_core *core, struct v4l2_control *ctl)
 			/* Keeps U Saturation proportional to V Sat */
 			vvalue=(value*0x5a)/0x7f;
 		}
-		tw_write(TW68_SAT_V, vvalue);
-		tw_write(TW68_SAT_U, value);
+		tw_writeb(TW68_SAT_V, vvalue);
+		tw_writeb(TW68_SAT_U, value);
 		break;
 	case V4L2_CID_CHROMA_AGC:
 		/* Do not allow chroma AGC to be enabled for SECAM */
 		value = ((ctl->value - c->off) << c->shift) & c->mask;
 		if (core->tvnorm & V4L2_STD_SECAM && value)
 			return -EINVAL;
-		tw_andor(c->reg, c->mask, value);
+		tw_andorb(c->reg, c->mask, value);
 		break;
 	case V4L2_CID_COLOR_KILLER:
 		if (ctl->value)
 			value = 0xe0;
 		else
 			value = 0x00;
-		tw_andor(c->reg, 0xe0, value);
+		tw_andorb(c->reg, 0xe0, value);
 		break;
 	default:
 		value = ((ctl->value - c->off) << c->shift) & c->mask;
-		tw_write(c->reg, value);
+		tw_writeb(c->reg, value);
 		break;
 	}
 	dprintk(1,"set_control id=0x%X(%s) ctrl=0x%02x, "
@@ -1083,14 +1408,11 @@ static int vidioc_streamon(struct file *file, void *priv,
 #if 0
 /* ****** Debugging - dump all registers ****** */
 {
-int i;
 struct tw68_core  *core = dev->core;
   printk("PCI Registers:\n");
-  for (i = 0; i <= 0x6c; i += 4)
-    printk("0x%03x: 0x%08x\n", i, tw_read(i));
-  printk("Decoder Control Registers:\n");
-  for (i = 0x204; i <= 0x2e8; i += 4)
-    printk("0x%03x: 0x%02x\n", i, tw_read(i));
+  dump_pci_regs(0, 0x200, core);
+  printk("Video Registers:\n");
+  dump_vregs(0x200, 0x300, core);
 }
 #endif
 	return videobuf_streamon(get_queue(fh));
@@ -1287,7 +1609,7 @@ static void tw6800_vid_timeout(unsigned long data)
 		wake_up(&buf->vb.done);
 		printk("%s/0: [%p/%d] timeout - dma=0x%08lx\n", core->name,
 		       buf, buf->vb.i, (unsigned long)buf->risc.dma);
-		tw68_risc_program_dump(core, &buf->risc);
+//		tw68_risc_program_dump(core, &buf->risc);
 	}
 	restart_video_queue(dev,q);
 	spin_unlock_irqrestore(&dev->slock,flags);
@@ -1308,7 +1630,7 @@ static void tw6800_vid_irq(struct tw6800_dev *dev, u32 status)
 		return;		/* if not a video interrupt, return */
 
 	/* reset interrupts handled by this routine */
-	tw_write(TW68_INTSTAT, TW68_VID_INTS);
+	tw_writel(TW68_INTSTAT, TW68_VID_INTS);
 
 	if (status & TW68_PABORT) {	/* TODO - what should we do? */
 		iprintk(2, "PABORT interrupt\n");
@@ -1316,26 +1638,27 @@ static void tw6800_vid_irq(struct tw6800_dev *dev, u32 status)
 	if (status & TW68_DMAPERR) {
 		iprintk(2, "DMAPERR interrupt\n");
 		/* Stop risc & fifo */
-		tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-		tw_clear(TW68_INTMASK, TW68_VID_INTS);
+		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+		tw_clearl(TW68_INTMASK, TW68_VID_INTS);
 		core->pci_irqmask &= ~TW68_VID_INTS;
 		return;
 	}
 	if (status & TW68_FDMIS) {	/* logic error somewhere */
 		iprintk(2, "FDMIS interrupt\n");
 		/* Stop risc & fifo */
-		tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-		tw_clear(TW68_INTMASK, TW68_VID_INTS);
+		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+		tw_clearl(TW68_INTMASK, TW68_VID_INTS);
 		core->pci_irqmask &= ~TW68_VID_INTS;
 		return;
 	}
 	if (status & TW68_FFOF) {	/* probably a logic error */
 		iprintk(2, "FFOF interrupt\n");
+printk(KERN_DEBUG "%s: FFOF interrupt\n", __func__);
 		/* Stop risc & fifo */
-		tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-		tw_clear(TW68_INTMASK, TW68_VID_INTS);
-		core->pci_irqmask &= ~TW68_VID_INTS;
-		return;
+//		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+//		tw_clearl(TW68_INTMASK, TW68_VID_INTS);
+//		core->pci_irqmask &= ~TW68_VID_INTS;
+//		return;
 	}
 
 	if (status & TW68_DMAPI) {
@@ -1349,12 +1672,12 @@ static void tw6800_vid_irq(struct tw6800_dev *dev, u32 status)
 		tw68_wakeup(core, q, 2);
 		spin_unlock(&dev->slock);
 		/* Check whether we have gotten into 'stopper' code */
-		reg = tw_read(TW68_DMAP_PP);
+		reg = tw_readl(TW68_DMAP_PP);
 		if ((reg >= q->stopper.dma) &&
 		    (reg < q->stopper.dma + q->stopper.size)) {
 			/* Yes - stop risc & fifo */
-			tw_clear(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-			tw_clear(TW68_INTMASK, TW68_VID_INTS);
+			tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+			tw_clearl(TW68_INTMASK, TW68_VID_INTS);
 			core->pci_irqmask &= ~TW68_VID_INTS;
 			dprintk(2, "stopper risc code entered\n");
 			return;
@@ -1379,13 +1702,13 @@ static irqreturn_t tw6800_irq(int irq, void *dev_id)
 	u32 status;
 	int loop, handled = 0;
 
-	status = tw_read(TW68_INTSTAT);
+	status = tw_readl(TW68_INTSTAT);
 	/* Check if anything to do */
 	if (0 == status)
 		return IRQ_RETVAL(0);	/* No - return */
 	for (loop = 0; loop < 10; loop++) {
 		/* check for all anticipated interrupts */
-		status = tw_read(TW68_INTSTAT);
+		status = tw_readl(TW68_INTSTAT);
 		if (0 == (status & core->pci_irqmask))
 			goto out;	/* all interrupts handled */
 		handled = 1;
@@ -1396,13 +1719,13 @@ static irqreturn_t tw6800_irq(int irq, void *dev_id)
 	if (10 == loop) {
 		printk(KERN_WARNING "%s/0: irq loop -- clearing mask\n",
 		       core->name);
-		tw_write(TW68_INTMASK,0);
+		tw_writel(TW68_INTMASK,0);
 	}
 
  out:
-if (0 == handled)
-  printk(KERN_DEBUG "%s: Interrupt not handled - status=0x%08x\n",
-    __func__, status);
+	if (0 == handled)
+  		printk(KERN_DEBUG "%s: Interrupt not handled - "
+			"status=0x%08x\n", __func__, status);
 	return IRQ_RETVAL(handled);
 }
 
@@ -1460,7 +1783,8 @@ static struct video_device tw6800_video_template = {
 	.minor                = -1,
 	.ioctl_ops 	      = &video_ioctl_ops,
 	.tvnorms              = TW68_NORMS,
-	.current_norm         = V4L2_STD_NTSC_M,
+	.current_norm         = V4L2_STD_PAL_BG,
+//	.current_norm         = V4L2_STD_NTSC_M,
 };
 
 /* ----------------------------------------------------------- */
@@ -1536,7 +1860,7 @@ static int __devinit tw6800_initdev(struct pci_dev *pci_dev,
 		       core->name,pci_dev->irq);
 		goto fail_core;
 	}
-	tw_set(TW68_INTMASK, core->pci_irqmask);
+	tw_setl(TW68_INTMASK, core->pci_irqmask);
 
 #if 0
 	/* load and configure helper modules */
@@ -1713,7 +2037,7 @@ static int tw6800_resume(struct pci_dev *pci_dev)
 	/* FIXME: re-initialize hardware */
 	tw68_reset(core);
 
-	tw_set(TW68_INTMASK, core->pci_irqmask);
+	tw_setl(TW68_INTMASK, core->pci_irqmask);
 
 	/* restart video+vbi capture */
 	spin_lock(&dev->slock);
