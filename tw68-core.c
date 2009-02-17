@@ -85,7 +85,7 @@ static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
 			    unsigned int lines, unsigned int lpi)
 {
 	struct scatterlist *sg;
-	unsigned int line,todo;
+	unsigned int line,todo,done;
 
 	/* sync instruction */
 	if (sync_line != NO_SYNC_LINE) {
@@ -106,7 +106,7 @@ static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
 		if (bpl <= sg_dma_len(sg) - offset) {
 			/* fits into current chunk */
 			*(rp++) = cpu_to_le32(RISC_LINESTART |
-					      (offset<<12) | bpl);
+					      /* (offset<<12) |*/  bpl);
 			*(rp++) = cpu_to_le32(sg_dma_address(sg) + offset);
 			offset += bpl;
 		} else {
@@ -118,22 +118,27 @@ static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
 			 */
 			todo = bpl;	/* one full line to be done */
 			/* first fragment */
-			*(rp++) = cpu_to_le32(RISC_LINESTART | (7 << 24) |
-					(offset<<12) |
-					(sg_dma_len(sg) - offset));
+			done = (sg_dma_len(sg) - offset);
+			*(rp++) = cpu_to_le32(RISC_LINESTART |
+						(7 << 24) |
+						done);
 			*(rp++) = cpu_to_le32(sg_dma_address(sg) + offset);
-			todo -= (sg_dma_len(sg) - offset);
+			todo -= done;
 			sg++;
 			/* succeeding fragments have no offset */
 			while (todo > sg_dma_len(sg)) {
 				*(rp++) = cpu_to_le32(RISC_INLINE |
-					  sg_dma_len(sg));
+						(done << 12) |
+						sg_dma_len(sg));
 				*(rp++) = cpu_to_le32(sg_dma_address(sg));
 				todo -= sg_dma_len(sg);
 				sg++;
+				done += sg_dma_len(sg);
 			}
 			/* final chunk - offset 0, count 'todo' */
-			*(rp++) = cpu_to_le32(RISC_INLINE | todo);
+			*(rp++) = cpu_to_le32(RISC_INLINE |
+						(done << 12) |
+						todo);
 			*(rp++) = cpu_to_le32(sg_dma_address(sg));
 			offset = todo;
 		}
@@ -369,19 +374,86 @@ void tw68_shutdown(struct tw68_core *core)
 int tw68_reset(struct tw68_core *core)
 {
 	tw68_shutdown(core);
-
-	tw_writeb(TW68_ACNTL, 0x80);
+	/* clear any pending interrupts */
+	tw_writel(TW68_INTSTAT, 0xffffffff);
+	/* disable GPIO outputs */
+//	tw_writel(TW68_GPOE, 0);
+	tw_writeb(TW68_ACNTL, 0x80);	/* device reset */
 	/* wait a bit */
 	msleep(100);
 
-	/* FIXME - check if any of the following need to be taken care of 
-	 * 	agc enable
-	 *	agc gain
-	 *	adaptibe agc
-	 *	chroma agc
-	 *	ckillen
-	 *	color control
+	tw_writeb(TW68_INFORM, 0x40);
+	tw_writeb(TW68_OPFORM, 0x04);
+	tw_writeb(TW68_HSYNC, 0);
+	tw_writeb(TW68_ACNTL, 0x42);
+	tw_writeb(TW68_CNTRL1, 0xcc);
+
+	tw_writeb(TW68_CROP_HI, 0x02);
+	tw_writeb(TW68_VDELAY_LO, 0x18);
+	tw_writeb(TW68_VACTIVE_LO, 0xf0);
+	tw_writeb(TW68_HDELAY_LO, 0x0f);
+	tw_writeb(TW68_HACTIVE_LO, 0xd0);
+	tw_writeb(TW68_VSCALE_LO, 0);
+	tw_writeb(TW68_SCALE_HI, 0x11);
+	tw_writeb(TW68_HSCALE_LO, 0);
+
+	/*
+	 *  Following the bttv patches, we use the separate registers
+	 *  for the second field.  However, we initialize them exactly
+	 *  the same as the primary ones, since that's what's done
+	 *  when they are modified at run-time.
 	 */
+	tw_writeb(TW68_F2CNT, 0x01);
+	tw_writeb(TW68_F2CROP_HI, 0x02);
+	tw_writeb(TW68_F2VDELAY_LO, 0x18);
+	tw_writeb(TW68_F2VACTIVE_LO, 0xf0);
+	tw_writeb(TW68_F2HDELAY_LO, 0x0f);
+	tw_writeb(TW68_F2HACTIVE_LO, 0xd0);
+	tw_writeb(TW68_F2VSCALE_LO, 0);
+	tw_writeb(TW68_F2SCALE_HI, 0x11);
+	tw_writeb(TW68_F2HSCALE_LO, 0);
+
+	tw_writeb(TW68_BRIGHT, 0);
+	tw_writeb(TW68_CONTRAST, 0x5c);
+	tw_writeb(TW68_SHARPNESS, 0x98);
+	tw_writeb(TW68_SAT_U, 0x80);
+	tw_writeb(TW68_SAT_V, 0x80);
+	tw_writeb(TW68_HUE, 0);
+	tw_writeb(TW68_SHARP2, 0xc6);
+	tw_writeb(TW68_VSHARP, 0x84);
+	tw_writeb(TW68_CORING, 0x44);
+	tw_writeb(TW68_CC_STATUS, 0x0a);
+	tw_writeb(TW68_SDT, 0x07);
+	tw_writeb(TW68_SDTR, 0x7f);
+	tw_writeb(TW68_RESERV2, 0x07);	/* FIXME - why? */
+	tw_writeb(TW68_RESERV3, 0x7f);	/* FIXME - why? */
+	tw_writeb(TW68_CLMPG, 0x50);
+	tw_writeb(TW68_IAGC, 0x42);
+	tw_writeb(TW68_AGCGAIN, 0xf0);
+	tw_writeb(TW68_PEAKWT, 0xd8);
+	tw_writeb(TW68_CLMPL, 0xbc);
+	tw_writeb(TW68_SYNCT, 0xb8);
+	tw_writeb(TW68_MISSCNT, 0x44);
+	tw_writeb(TW68_PCLAMP, 0x2a);
+	tw_writeb(TW68_VERTCTL, 0);
+	tw_writeb(TW68_VERTCTL2, 0);
+	tw_writeb(TW68_COLORKILL, 0x78);
+	tw_writeb(TW68_COMB, 0x44);
+	tw_writeb(TW68_LDLY, 0x30);
+	tw_writeb(TW68_MISC1, 0x14);
+	tw_writeb(TW68_LOOP, 0xa5);
+	tw_writeb(TW68_MISC2, 0xe0);
+	tw_writeb(TW68_MACROVISION, 0);
+	tw_writeb(TW68_CLMPCTL2, 0);
+	tw_writeb(TW68_FILLDATA, 0xa0);
+	tw_writeb(TW68_CLMD, 0x05);
+	tw_writeb(TW68_IDCNTL, 0);
+	tw_writeb(TW68_CLCNTL1, 0);
+	tw_writeb(TW68_SLICELEVEL, 0);
+	tw_writel(TW68_VBIC, 0x03);
+	tw_writel(TW68_CAP_CTL, 0x43);
+	tw_writel(TW68_DMAC, 0x2000);	/* patch set had 0x2080 */
+	tw_writel(TW68_TESTREG, 0);
 
 	return 0;
 }

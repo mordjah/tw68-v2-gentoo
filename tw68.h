@@ -180,6 +180,7 @@ struct tw68_subid {
 #define BUFFER_TIMEOUT     msecs_to_jiffies(500)  /* 0.5 seconds */
 
 /* buffer for one video frame */
+struct tw68_norm;
 struct tw68_buffer {
 	/* common v4l buffer stuff -- must be first */
 	struct videobuf_buffer vb;
@@ -235,7 +236,7 @@ struct tw68_core {
 
 	/* state info */
 	struct task_struct         *kthread;
-	v4l2_std_id                tvnorm;
+	struct tw68_norm	   *tvnorm;
 	u32                        tvaudio;
 	u32                        audiomode_manual;
 	u32                        audiomode_current;
@@ -260,10 +261,19 @@ struct tw68_core {
 };
 
 struct tw6800_dev;
-struct cx6802_dev;
+//struct cx6802_dev;
 
 /* ----------------------------------------------------------- */
 /* function 0: video stuff                                     */
+
+struct tw68_norm {
+	v4l2_std_id		v4l2_id;
+	u32			format;
+	u16			swidth;
+	u16			sheight;
+	u16			hdelay;
+	u16			vdelay;
+};
 
 struct tw6800_fh {
 	struct tw6800_dev          *dev;

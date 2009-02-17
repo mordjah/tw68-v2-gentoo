@@ -131,7 +131,6 @@ static struct tw6800_fmt formats[] = {
 		.twformat = ColorFormatRGB15 | ColorFormatBSWAP,
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
-#if 0
 	},{
 		.name     = "4:2:2, packed, YUYV",
 		.fourcc   = V4L2_PIX_FMT_YUYV,
@@ -144,8 +143,83 @@ static struct tw6800_fmt formats[] = {
 		.twformat = ColorFormatYUY2 | ColorFormatBSWAP,
 		.depth    = 16,
 		.flags    = FORMAT_FLAGS_PACKED,
-#endif
 	},
+};
+
+/*
+ * The settings for HDELAY, HACTIVE, VDELAY and VACTIVE don't seem to
+ * be very obvious between different norms.  To simplify the logic, we
+ * use the following table to allow their settings to be easily determined.
+ * The elements of each entry are as follows:
+ * 	v4l2_id		V4L2 standard - bit significant, multiple norms
+ * 			can be described with a single entry.  The table
+ * 			is searched in order, so the first matching entry
+ * 			is the one which is used.
+ * 	format		Setting for the TW6800 SDT register
+ * 	swidth		Width of active video
+ * 	totwidth	Total line width
+ * 	hdelay		Start of active video, relative to edge of HSYNC
+ * 	hactive		Number of bytes of active video
+ * 	vdelay		Start of active video, relative to edge of VSYNC
+ */
+static struct tw68_norm norms[] = {
+	{
+		.v4l2_id  = V4L2_STD_NTSC_M_JP,
+		.format   = VideoFormatNTSCJapan,
+		.swidth   = 640,
+		.sheight  = 480,
+		.hdelay   = 135,
+		.vdelay   = 0x16,
+	},{
+		.v4l2_id  = V4L2_STD_NTSC,
+		.format   = VideoFormatNTSC,
+		.swidth   = 768,
+		.sheight  = 480,
+		.hdelay   = 128,
+		.vdelay   = 0x1a,
+	},{
+		.v4l2_id  = V4L2_STD_PAL_M,
+		.format   = VideoFormatPALM,
+		.swidth   = 640,
+		.sheight  = 480,
+		.hdelay   = 135,
+		.vdelay   = 0x1a,
+	},{
+		.v4l2_id  = V4L2_STD_PAL_N,
+		.format   = VideoFormatPALN,
+		.swidth   = 768,
+		.sheight  = 576,
+		.hdelay   = 186,
+		.vdelay   = 0x20,
+	},{
+		.v4l2_id  = V4L2_STD_PAL_Nc,
+		.format   = VideoFormatPALNC,
+		.swidth   = 640,
+		.sheight  = 576,
+		.hdelay   = 130,
+		.vdelay   = 0x1a,
+	},{
+		.v4l2_id  = V4L2_STD_PAL_60,
+		.format   = VideoFormatPAL60,
+		.swidth   = 924,
+		.sheight  = 480,
+		.hdelay   = 186,
+		.vdelay   = 0x1a,
+	},{
+		.v4l2_id  = V4L2_STD_PAL,
+		.format   = VideoFormatPAL,
+		.swidth   = 924,
+		.sheight  = 576,
+		.hdelay   = 186,
+		.vdelay   = 0x20,
+	},{
+		.v4l2_id  = V4L2_STD_SECAM,
+		.format   = VideoFormatSECAM,
+		.swidth   = 924,
+		.sheight  = 576,
+		.hdelay   = 186,
+		.vdelay   = 0x20,
+	}
 };
 
 static struct tw6800_fmt* format_by_fourcc(unsigned int fourcc)
@@ -171,10 +245,10 @@ static struct tw68_ctrl tw6800_ctls[] = {
 		.v = {
 			.id            = V4L2_CID_BRIGHTNESS,
 			.name          = "Brightness",
-			.minimum       = 0x00,
-			.maximum       = 0xff,
-			.step          = 1,
-			.default_value = 0x7f,
+			.minimum       = -127,
+			.maximum       = 128,
+			.step          = 2,
+			.default_value = 0,
 			.type          = V4L2_CTRL_TYPE_INTEGER,
 		},
 		.off                   = 128,
@@ -187,8 +261,8 @@ static struct tw68_ctrl tw6800_ctls[] = {
 			.name          = "Contrast",
 			.minimum       = 0,
 			.maximum       = 0xff,
-			.step          = 1,
-			.default_value = 0x7f,
+			.step          = 2,
+			.default_value = 84,
 			.type          = V4L2_CTRL_TYPE_INTEGER,
 		},
 		.off                   = 0,
@@ -199,10 +273,10 @@ static struct tw68_ctrl tw6800_ctls[] = {
 		.v = {
 			.id            = V4L2_CID_HUE,
 			.name          = "Hue",
-			.minimum       = 0,
-			.maximum       = 0xff,
+			.minimum       = -90,
+			.maximum       = 90,
 			.step          = 1,
-			.default_value = 0x7f,
+			.default_value = 0,
 			.type          = V4L2_CTRL_TYPE_INTEGER,
 		},
 		.off                   = 128,
@@ -248,7 +322,7 @@ static struct tw68_ctrl tw6800_ctls[] = {
 			.default_value = 0x1,
 			.type          = V4L2_CTRL_TYPE_BOOLEAN,
 		},
-		.reg                   = TW68_MISC3,
+		.reg                   = TW68_LDLY, /* FIXME */
 		.mask                  = 0x80,
 		.shift                 = 7,
 	}
@@ -287,10 +361,12 @@ static void dump_vregs (int start, int end, struct tw68_core *core)
 	nchar = 0;
 	for (ix = start; ix < end; ix += 4) {
 		if (nchar == 0)
-			pos = snprintf (line, 10, "0x%04x   ", ix);
+			pos = snprintf (line, 10, "0x%04x  ", ix);
+		if (!(ix % 16))
+			line[pos + nchar++] = ' ';
 		snprintf (&line[pos + nchar], 4, "%02x ", tw_readb(ix));
 		nchar += 3;
-		if (nchar >= 48) {
+		if (nchar >= 50) {
 			printk("%s\n", line);
 			nchar = 0;
 		}
@@ -321,89 +397,6 @@ static void dump_pci_regs (int start, int end, struct tw68_core *core)
 }
 /* ----------------------------------------------------------- */
 /* tv norms                                                    */
-
-/*
- * Normal vs. square-pixel
- */
-static unsigned int inline norm_maxw(v4l2_std_id norm)
-{
-	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 720 : 768;
-}
-
-/*
- * Number of scan lines per frame
- * 60Hz vs. 50Hz
- */
-static unsigned int inline norm_maxh(v4l2_std_id norm)
-{
-	return (norm & V4L2_STD_625_50) ? 288 : 240;
-}
-
-/*
- * norm_hdelay
- *
- * 	Produces the number of pixels to be skipped before the "active"
- * 	area.
- *
- * 	@norm		v4l2 norm in use
- */
-static unsigned int inline norm_hdelay(v4l2_std_id norm)
-{
-	return (norm & V4L2_STD_NTSC) ? 106 : 108;
-//	return (norm & (V4L2_STD_MN & ~V4L2_STD_PAL_Nc)) ? 106 : 108;
-}
-
-/*
- * norm_vdelay
- * 
- * 	Produces the number of scan lines to be skipped before the "active"
- * 	area.
- *
- * 	@norm		v4l2 norm in use
- */
-static unsigned int inline norm_vdelay(v4l2_std_id norm)
-{
-	return (norm & V4L2_STD_625_50) ? 0x24 : 0x18;
-}
-
-#if 0
-static unsigned int inline norm_fsc8(v4l2_std_id norm)
-{
-	if (norm & V4L2_STD_PAL_M)
-		return 28604892;      // 3.575611 MHz
-
-	if (norm & (V4L2_STD_PAL_Nc))
-		return 28656448;      // 3.582056 MHz
-
-	if (norm & V4L2_STD_NTSC) // All NTSC/M and variants
-		return 28636360;      // 3.57954545 MHz +/- 10 Hz
-
-	/* SECAM have also different sub carrier for chroma,
-	   but step_db and step_dr, at tw68_set_tvnorm already handles that.
-
-	   The same FSC applies to PAL/BGDKIH, PAL/60, NTSC/4.43 and PAL/N
-	 */
-
-	return 35468950;      // 4.43361875 MHz +/- 5 Hz
-}
-
-static unsigned int inline norm_htotal(v4l2_std_id norm)
-{
-
-	unsigned int fsc4=norm_fsc8(norm)/2;
-
-	/* returns 4*FSC / vtotal / frames per seconds */
-	return (norm & V4L2_STD_625_50) ?
-				((fsc4+312)/625+12)/25 :
-				((fsc4+262)/525*1001+15000)/30000;
-}
-
-
-static unsigned int inline norm_vbipack(v4l2_std_id norm)
-{
-	return (norm & V4L2_STD_625_50) ? 511 : 400;
-}
-#endif
 
 /*
  * tw68_set_scale
@@ -449,18 +442,18 @@ int tw68_set_scale(struct tw68_core *core, unsigned int width,
 	if (!V4L2_FIELD_HAS_BOTH(field))
 		height *= 2;
 
-	hactive = norm_maxw(core->tvnorm);
-	hdelay = norm_hdelay(core->tvnorm);
+	hactive = core->tvnorm->swidth;
+	hdelay = core->tvnorm->hdelay;
 	hscale = (hactive * 256) / width;
 
-	vactive = norm_maxh(core->tvnorm);
-	vdelay = norm_vdelay(core->tvnorm);
+	vactive = core->tvnorm->sheight;
+	vdelay = core->tvnorm->vdelay;
 	vscale = (vactive * 256) / height;
 
 	dprintk(2, "set_scale: %dx%d [%s%s,%s]\n", width, height,
 		V4L2_FIELD_HAS_TOP(field)    ? "T" : "",
 		V4L2_FIELD_HAS_BOTTOM(field) ? "B" : "",
-		v4l2_norm_to_name(core->tvnorm));
+		v4l2_norm_to_name(core->tvnorm->v4l2_id));
 	dprintk(2, "set_scale: hactive=%d, hdelay=%d, hscale=%d; "
 		   "vactive=%d, vdelay=%d, vscale=%d\n",
 		   hactive, hdelay, hscale, vactive, vdelay, vscale);
@@ -470,15 +463,23 @@ int tw68_set_scale(struct tw68_core *core, unsigned int width,
 		((hdelay & 0x300)  >> 6) |
 		((hactive & 0x300) >> 8);	
 	tw_writeb(TW68_CROP_HI, comb);
+	tw_writeb(TW68_F2CROP_HI, comb);
 	tw_writeb(TW68_VDELAY_LO, vdelay & 0xff);
+	tw_writeb(TW68_F2VDELAY_LO, vdelay & 0xff);
 	tw_writeb(TW68_VACTIVE_LO, vactive & 0xff);
+	tw_writeb(TW68_F2VACTIVE_LO, vactive & 0xff);
 	tw_writeb(TW68_HDELAY_LO, hdelay & 0xff);
+	tw_writeb(TW68_F2HDELAY_LO, hdelay & 0xff);
 	tw_writeb(TW68_HACTIVE_LO, hactive & 0xff);
+	tw_writeb(TW68_F2HACTIVE_LO, hactive & 0xff);
 
 	comb = ((vscale & 0xf00) >> 4) | ((hscale & 0xf00) >> 8);
 	tw_writeb(TW68_SCALE_HI, comb);
+	tw_writeb(TW68_F2SCALE_HI, comb);
 	tw_writeb(TW68_VSCALE_LO, vscale);
+	tw_writeb(TW68_F2VSCALE_LO, vscale);
 	tw_writeb(TW68_HSCALE_LO, hscale);
+	tw_writeb(TW68_F2HSCALE_LO, hscale);
 
 #if 0
 	/* todo -  setup filters */
@@ -501,88 +502,28 @@ int tw68_set_scale(struct tw68_core *core, unsigned int width,
 	printk(KERN_DEBUG "set_scale: filter  0x%04x\n", value);
 #endif
 
+dump_vregs(0, 0x3ff, core);
 	return 0;
 }
 EXPORT_SYMBOL(tw68_set_scale);
 
 int tw68_set_tvnorm(struct tw68_core *core, v4l2_std_id norm)
 {
-	u32 twiformat;
+	int i;
 
-printk(KERN_DEBUG "Entered %s\n", __func__);
-	core->tvnorm = norm;
-
-	if (norm & V4L2_STD_NTSC_M_JP) {
-		twiformat = VideoFormatNTSCJapan;
-	} else if (norm & V4L2_STD_NTSC_443) {
-		twiformat = VideoFormatNTSC443;
-	} else if (norm & V4L2_STD_PAL_M) {
-		twiformat = VideoFormatPALM;
-	} else if (norm & V4L2_STD_PAL_N) {
-		twiformat = VideoFormatPALN;
-	} else if (norm & V4L2_STD_PAL_Nc) {
-		twiformat = VideoFormatPALNC;
-	} else if (norm & V4L2_STD_PAL_60) {
-		twiformat = VideoFormatPAL60;
-	} else if (norm & V4L2_STD_NTSC) {
-		twiformat = VideoFormatNTSC;
-	} else if (norm & V4L2_STD_SECAM) {
-		twiformat = VideoFormatSECAM;
-	} else { /* PAL */
-		twiformat = VideoFormatPAL;
+	for (i = 0; i < ARRAY_SIZE(norms); i++) {
+		if (norms[i].v4l2_id & norm)
+			break;
 	}
+	if (i == ARRAY_SIZE(norms))
+		return -EINVAL;
 
-printk(KERN_DEBUG "set_tvnorm: TW68_SDT  0x%08x [old=0x%08x]\n",
-twiformat, (tw_readb(TW68_SDT) >> 4) & 0x07);
-
-	tw_andorb(TW68_SDT, 0x07, twiformat);
-
-#if 0
-	// FIXME: as-is from DScaler
-	printk(KERN_DEBUG "set_tvnorm: MO_OUTPUT_FORMAT 0x%08x [old=0x%08x]\n",
-		twoformat, tw_read(MO_OUTPUT_FORMAT));
-//	tw_write(MO_OUTPUT_FORMAT, twoformat);
-
-	// MO_SCONV_REG = adc clock / video dec clock * 2^17
-	tmp64  = adc_clock * (u64)(1 << 17);
-	do_div(tmp64, vdec_clock);
-	printk(KERN_DEBUG "set_tvnorm: MO_SCONV_REG     0x%08x [old=0x%08x]\n",
-		(u32)tmp64, tw_read(MO_SCONV_REG));
-	tw_write(MO_SCONV_REG, (u32)tmp64);
-
-	// MO_SUB_STEP = 8 * fsc / video dec clock * 2^22
-	tmp64  = step_db * (u64)(1 << 22);
-	do_div(tmp64, vdec_clock);
-	printk(KERN_DEBUG "set_tvnorm: MO_SUB_STEP      0x%08x [old=0x%08x]\n",
-		(u32)tmp64, tw_read(MO_SUB_STEP));
-	tw_write(MO_SUB_STEP, (u32)tmp64);
-
-	// MO_SUB_STEP_DR = 8 * 4406250 / video dec clock * 2^22
-	tmp64  = step_dr * (u64)(1 << 22);
-	do_div(tmp64, vdec_clock);
-	printk(KERN_DEBUG "set_tvnorm: MO_SUB_STEP_DR   0x%08x [old=0x%08x]\n",
-		(u32)tmp64, tw_read(MO_SUB_STEP_DR));
-	tw_write(MO_SUB_STEP_DR, (u32)tmp64);
-
-	// bdelay + agcdelay
-	bdelay   = vdec_clock * 65 / 20000000 + 21;
-	agcdelay = vdec_clock * 68 / 20000000 + 15;
-	printk(KERN_DEBUG "set_tvnorm: MO_AGC_BURST     0x%08x [old=0x%08x,bdelay=%d,agcdelay=%d]\n",
-		(bdelay << 8) | agcdelay, tw_read(MO_AGC_BURST), bdelay, agcdelay);
-	tw_write(MO_AGC_BURST, (bdelay << 8) | agcdelay);
-
-	// htotal
-	tmp64 = norm_htotal(norm) * (u64)vdec_clock;
-	do_div(tmp64, fsc8);
-	htotal = (u32)tmp64 | (HLNotchFilter4xFsc << 11);
-	printk(KERN_DEBUG "set_tvnorm: MO_HTOTAL        0x%08x [old=0x%08x,htotal=%d]\n",
-		htotal, tw_read(MO_HTOTAL), (u32)tmp64);
-	tw_write(MO_HTOTAL, htotal);
-
-#endif
+	core->tvnorm = &norms[i];
+	tw_andorb(TW68_SDT, 0x07, norms[i].format);
+	tw_andorb(TW68_RESERV2, 0x07, norms[i].format);
 
 	// this is needed as well to set all tvnorm parameter
-	tw68_set_scale(core, 320, 240, V4L2_FIELD_INTERLACED);
+//	tw68_set_scale(core, 320, 240, V4L2_FIELD_INTERLACED);
 
 	// done
 	return 0;
@@ -608,7 +549,7 @@ printk(KERN_DEBUG  "Entered ctrl_query for %d\n", qctrl->id);
 
 	/* Report chroma AGC as inactive when SECAM is selected */
 	if (tw6800_ctls[i].v.id == V4L2_CID_CHROMA_AGC &&
-	    core->tvnorm & V4L2_STD_SECAM)
+	    core->tvnorm->v4l2_id & V4L2_STD_SECAM)
 		qctrl->flags |= V4L2_CTRL_FLAG_INACTIVE;
 
 	return 0;
@@ -800,8 +741,8 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 	int rc, init_buffer = 0;
 
 	BUG_ON(NULL == fh->fmt);
-	if (fh->width  < 48 || fh->width  > norm_maxw(core->tvnorm) ||
-	    fh->height < 32 || fh->height > norm_maxh(core->tvnorm))
+	if (fh->width  < 48 || fh->width  > core->tvnorm->swidth ||
+	    fh->height < 32 || fh->height > core->tvnorm->sheight)
 		return -EINVAL;
 	buf->vb.size = (fh->width * fh->height * fh->fmt->depth) >> 3;
 	if (0 != buf->vb.baddr  &&  buf->vb.bsize < buf->vb.size)
@@ -1187,7 +1128,7 @@ int tw68_set_control(struct tw68_core *core, struct v4l2_control *ctl)
 
 		value = ((ctl->value - c->off) << c->shift) & c->mask;
 
-		if (core->tvnorm & V4L2_STD_SECAM) {
+		if (core->tvnorm->v4l2_id & V4L2_STD_SECAM) {
 			/* For SECAM, both U and V sat should be equal */
 			vvalue = value;
 		} else {
@@ -1200,7 +1141,7 @@ int tw68_set_control(struct tw68_core *core, struct v4l2_control *ctl)
 	case V4L2_CID_CHROMA_AGC:
 		/* Do not allow chroma AGC to be enabled for SECAM */
 		value = ((ctl->value - c->off) << c->shift) & c->mask;
-		if (core->tvnorm & V4L2_STD_SECAM && value)
+		if (core->tvnorm->v4l2_id & V4L2_STD_SECAM && value)
 			return -EINVAL;
 		tw_andorb(c->reg, c->mask, value);
 		break;
@@ -1270,8 +1211,8 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 
 printk(KERN_DEBUG "Trying format %s\n", fmt->name);
 	field = f->fmt.pix.field;
-	maxw  = norm_maxw(core->tvnorm);
-	maxh  = norm_maxh(core->tvnorm);
+	maxw  = core->tvnorm->swidth;
+	maxh  = core->tvnorm->sheight;
 
 	if (V4L2_FIELD_ANY == field) {
 		field = (f->fmt.pix.height > maxh/2)
@@ -1783,7 +1724,7 @@ static struct video_device tw6800_video_template = {
 	.minor                = -1,
 	.ioctl_ops 	      = &video_ioctl_ops,
 	.tvnorms              = TW68_NORMS,
-	.current_norm         = V4L2_STD_PAL_BG,
+	.current_norm         = V4L2_STD_PAL_M,
 //	.current_norm         = V4L2_STD_NTSC_M,
 };
 
@@ -1842,7 +1783,6 @@ static int __devinit tw6800_initdev(struct pci_dev *pci_dev,
 
 	/* initialize driver struct */
 	spin_lock_init(&dev->slock);
-	core->tvnorm = tw6800_video_template.current_norm;
 
 	/* init video dma queues */
 	INIT_LIST_HEAD(&dev->vidq.active);
@@ -1919,17 +1859,13 @@ static int __devinit tw6800_initdev(struct pci_dev *pci_dev,
 #endif
 
 	/* everything worked */
-printk(KERN_DEBUG  "TW68: Adding device list and setting drvdata\n");
 	list_add_tail(&dev->devlist,&tw6800_devlist);
 	pci_set_drvdata(pci_dev,dev);
 
 	/* initial device configuration */
 	mutex_lock(&core->lock);
-printk(KERN_DEBUG  "TW68: Setting tvnorm\n");
-	tw68_set_tvnorm(core,core->tvnorm);
-printk(KERN_DEBUG  "TW68: Initializing controls\n");
+	tw68_set_tvnorm(core, tw6800_video_template.current_norm);
 	init_controls(core);
-printk(KERN_DEBUG  "TW68: Setting video mux to channel 0\n");
 	tw68_video_mux(core,0);
 	mutex_unlock(&core->lock);
 

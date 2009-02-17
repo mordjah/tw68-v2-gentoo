@@ -45,6 +45,7 @@
 #define	TW68_GPIOC		0x024
 #define	TW68_GPOE		0x028
 #define	TW68_TESTREG		0x02C
+#define	TW68_CAP_CTL		0x040
 #define	TW68_VBIINST		0x06C
 /* define bits in FIFO and DMAP Control reg */
 #define	TW68_DMAP_EN		(1 << 0)
@@ -71,7 +72,7 @@
 #define	TW68_GPDATA		0x100
 #define	TW68_DSTATUS		0x204
 #define	TW68_INFORM		0x208
-#define	TW68_RESERV1		0x20C
+#define	TW68_OPFORM		0x20C
 #define	TW68_HSYNC		0x210
 #define	TW68_POLARITY		0x214
 #define	TW68_ACNTL		0x218
@@ -91,15 +92,15 @@
 #define	TW68_SAT_V		0x250
 #define	TW68_HUE		0x254
 #define	TW68_SHARP2		0x258
-#define	TW68_RESERV2		0x25C
+#define	TW68_VSHARP		0x25C
 #define	TW68_CORING		0x260
 #define	TW68_VBICNTL		0x264
 #define	TW68_CC_STATUS		0x268
 #define	TW68_CC_DATA		0x26C
 #define	TW68_SDT		0x270
 #define	TW68_SDTR		0x274
-#define	TW68_RESERV3		0x278
-#define	TW68_RESERV4		0x27C
+#define	TW68_RESERV2		0x278
+#define	TW68_RESERV3		0x27C
 #define	TW68_CLMPG		0x280
 #define	TW68_IAGC		0x284
 #define	TW68_AGCGAIN		0x288
@@ -111,22 +112,32 @@
 #define	TW68_VERTCTL		0x2A0
 #define	TW68_VERTCTL2		0x2A4
 #define	TW68_COLORKILL		0x2A8
-#define	TW68_COMBFILT		0x2AC
-#define	TW68_LUMA_HSYNC		0x2B0
+#define	TW68_COMB		0x2AC
+#define	TW68_LDLY		0x2B0
 #define	TW68_MISC1		0x2B4
-#define	TW68_MISC2		0x2B8
-#define	TW68_MISC3		0x2BC
+#define	TW68_LOOP		0x2B8
+#define	TW68_MISC2		0x2BC
 #define	TW68_MACROVISION	0x2C0
 #define	TW68_CLMPCTL2		0x2C4
 #define	TW68_FILLDATA		0x2C8
-#define	TW68_VBICNTL1		0x2CC
-#define	TW68_VBICNTL2		0x2D0
-#define	TW68_MISC4		0x2D4
+#define	TW68_CLMD		0x2CC
+#define	TW68_IDCNTL		0x2D0
+#define	TW68_CLCNTL1		0x2D4
 #define	TW68_SLICELEVEL		0x2D8
 #define	TW68_WSS1		0x2DC
 #define	TW68_WSS2		0x2E0
 #define	TW68_CSTATUS3		0x2E4
 #define	TW68_HFREF		0x2E8
+
+#define	TW68_F2CROP_HI		0x3DC
+#define	TW68_F2VDELAY_LO	0x3E0
+#define	TW68_F2VACTIVE_LO	0x3E4
+#define	TW68_F2HDELAY_LO	0x3E8
+#define	TW68_F2HACTIVE_LO	0x3EC
+#define	TW68_F2CNT		0x3F0
+#define	TW68_F2VSCALE_LO	0x3F4
+#define	TW68_F2SCALE_HI		0x3F8
+#define	TW68_F2HSCALE_LO	0x3FC
 
 #define	RISC_INT_BIT		0x08000000
 #define	RISC_SYNCO		0xC0000000
