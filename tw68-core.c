@@ -77,7 +77,7 @@ static DEFINE_MUTEX(devlist);
  *  @padding	number of bytes of padding to add
  *  @lines	number of lines in field
  *  @lpi	lines per IRQ, or 0 to not generate irqs
- *  		Note: IRQ to be generated _after_ lpi lines are transferred
+ *		Note: IRQ to be generated _after_ lpi lines are transferred
  */
 static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
 			    unsigned int offset, u32 sync_line,
@@ -171,11 +171,14 @@ static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
  * 	@padding	number of extra bytes to add at end of line
  * 	@lines		number of scan lines
  */
-int tw68_risc_buffer(struct pci_dev *pci, struct btcx_riscmem *risc,
-		     struct scatterlist *sglist,
-		     unsigned int top_offset, unsigned int bottom_offset,
-		     unsigned int bpl, unsigned int padding,
-		     unsigned int lines)
+int tw68_risc_buffer(struct pci_dev *pci,
+			struct btcx_riscmem *risc,
+			struct scatterlist *sglist,
+			unsigned int top_offset,
+			unsigned int bottom_offset,
+			unsigned int bpl,
+			unsigned int padding,
+			unsigned int lines)
 {
 	u32 instructions, fields;
 	__le32 *rp;
@@ -187,16 +190,17 @@ int tw68_risc_buffer(struct pci_dev *pci, struct btcx_riscmem *risc,
 	if (UNSET != bottom_offset)
 		fields++;
 
-	/* estimate risc mem: worst case is one write per page border +
-	   one write per scan line + syncs + jump (all 2 dwords).  Padding
-	   can cause next bpl to start close to a page border.  First DMA
-	   region may be smaller than PAGE_SIZE */
+	/*
+	 * estimate risc mem: worst case is one write per page border +
+	 * one write per scan line + syncs + jump (all 2 dwords).
+	 * Padding can cause next bpl to start close to a page border.
+	 * First DMA region may be smaller than PAGE_SIZE
+	 */
 	instructions  = fields * (1 + (((bpl + padding) * lines) /
 			 PAGE_SIZE) + lines) + 2;
 	if ((rc = btcx_riscmem_alloc(pci,risc,instructions*8)) < 0)
 		return rc;
 
-printk(KERN_DEBUG "%s: setting up buffer 0x%08x\n", __func__, (u32)risc->dma);
 	/* write risc instructions */
 	rp = risc->cpu;
 	if (UNSET != top_offset)	/* generates SYNCO */
@@ -213,6 +217,7 @@ printk(KERN_DEBUG "%s: setting up buffer 0x%08x\n", __func__, (u32)risc->dma);
 	return 0;
 }
 
+#if 0
 /* ------------------------------------------------------------------ */
 /* debug helper code                                                  */
 
@@ -265,7 +270,8 @@ void tw68_risc_program_dump(struct tw68_core *core,
 		tw68_risc_decode(*addr, *(addr+1));
 	}
 }
-EXPORT_SYMBOL(tw68_risc_program_dump);
+EXPORT_SYMBOL_GPL(tw68_risc_program_dump);
+#endif
 
 /*
  * tw68_risc_stopper
@@ -290,7 +296,7 @@ int tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc)
 	risc->jmp = risc->cpu;
 	return 0;
 }
-EXPORT_SYMBOL(tw68_risc_stopper);
+EXPORT_SYMBOL_GPL(tw68_risc_stopper);
 
 /*
  * tw68_free_buffer
@@ -311,6 +317,10 @@ tw68_free_buffer(struct videobuf_queue *q, struct tw68_buffer *buf)
 	buf->vb.state = VIDEOBUF_NEEDS_INIT;
 }
 
+/*
+ * I just didn't understand what some of the original code was doing
+ * here, so I commented out those parts.
+ */
 void tw68_wakeup(struct tw68_core *core,
 		 struct tw68_dmaqueue *q, u32 count)
 {
@@ -325,12 +335,11 @@ printk(KERN_DEBUG "%s: q->active empty\n", __func__);
 			break;
 }
 #endif
-if (list_empty(&q->active)) {
-	del_timer(&q->timeout);
-	return;
-}
-		buf = list_entry(q->active.next,
-				 struct tw68_buffer, vb.queue);
+	if (list_empty(&q->active)) {
+		del_timer(&q->timeout);
+		return;
+	}
+	buf = list_entry(q->active.next, struct tw68_buffer, vb.queue);
 #if 0
 		/* count comes from the hw and is 16 bits wide --
 		 * this trick handles wrap-arounds correctly for
@@ -342,21 +351,21 @@ printk(KERN_DEBUG "%s: count is %d, buf->count is %d\n",
 			break;
 }
 #endif
-		do_gettimeofday(&buf->vb.ts);
-		dprintk(2,"[%p/%d] wakeup reg=%d buf=%d\n",buf,buf->vb.i,
-			count, buf->count);
-		buf->vb.state = VIDEOBUF_DONE;
-		list_del(&buf->vb.queue);
-		wake_up(&buf->vb.done);
+	do_gettimeofday(&buf->vb.ts);
+	dprintk(2,"[%p/%d] wakeup reg=%d buf=%d\n",buf,buf->vb.i,
+		count, buf->count);
+	buf->vb.state = VIDEOBUF_DONE;
+	list_del(&buf->vb.queue);
+	wake_up(&buf->vb.done);
 #if 0
 	}
-#endif
 	if (list_empty(&q->active)) {
 		del_timer(&q->timeout);
 	} else {
-		mod_timer(&q->timeout, jiffies+BUFFER_TIMEOUT);
-	}
+#endif
+	mod_timer(&q->timeout, jiffies+BUFFER_TIMEOUT);
 #if 0
+	}
 	if (bc != 1)
 		dprintk(2, "%s: %d buffers handled (should be 1)\n",
 			__func__, bc);
@@ -461,9 +470,9 @@ int tw68_reset(struct tw68_core *core)
 /* ------------------------------------------------------------------ */
 
 struct video_device *tw68_vdev_init(struct tw68_core *core,
-				    struct pci_dev *pci,
-				    struct video_device *template,
-				    char *type)
+			struct pci_dev *pci,
+			struct video_device *template,
+			char *type)
 {
 	struct video_device *vfd;
 
@@ -483,7 +492,6 @@ struct tw68_core* tw68_core_get(struct pci_dev *pci)
 {
 	struct tw68_core *core;
 
-printk(KERN_DEBUG "Entered %s\n", __func__);
 	mutex_lock(&devlist);
 	list_for_each_entry(core, &tw68_devlist, devlist) {
 		if (pci->bus->number != core->pci_bus)
@@ -512,7 +520,6 @@ printk(KERN_DEBUG "Entered %s\n", __func__);
 
 void tw68_core_put(struct tw68_core *core, struct pci_dev *pci)
 {
-printk(KERN_DEBUG "Entered %s\n", __func__);
 	release_mem_region(pci_resource_start(pci,0),
 			   pci_resource_len(pci,0));
 
@@ -529,13 +536,13 @@ printk(KERN_DEBUG "Entered %s\n", __func__);
 
 /* ------------------------------------------------------------------ */
 
-EXPORT_SYMBOL(tw68_wakeup);
-EXPORT_SYMBOL(tw68_reset);
-EXPORT_SYMBOL(tw68_shutdown);
+EXPORT_SYMBOL_GPL(tw68_wakeup);
+EXPORT_SYMBOL_GPL(tw68_reset);
+EXPORT_SYMBOL_GPL(tw68_shutdown);
 
-EXPORT_SYMBOL(tw68_risc_buffer);
-EXPORT_SYMBOL(tw68_free_buffer);
+EXPORT_SYMBOL_GPL(tw68_risc_buffer);
+EXPORT_SYMBOL_GPL(tw68_free_buffer);
 
-EXPORT_SYMBOL(tw68_vdev_init);
-EXPORT_SYMBOL(tw68_core_get);
-EXPORT_SYMBOL(tw68_core_put);
+EXPORT_SYMBOL_GPL(tw68_vdev_init);
+EXPORT_SYMBOL_GPL(tw68_core_get);
+EXPORT_SYMBOL_GPL(tw68_core_put);

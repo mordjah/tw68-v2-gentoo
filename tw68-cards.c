@@ -183,8 +183,8 @@ tw68_get_resources (const struct tw68_core *core, struct pci_dev *pci)
 			pci_resource_len (pci, 0), core->name))
 		return 0;
 	printk (KERN_ERR
-		"%s/%d: Can't get MMIO memory @ 0x%llx, subsystem: %04x:%04x\n",
-		core->name, PCI_FUNC (pci->devfn),
+		"%s/%d: Can't get MMIO memory @ 0x%llx, subsystem: "
+		"%04x:%04x\n", core->name, PCI_FUNC (pci->devfn),
 		(unsigned long long) pci_resource_start (pci, 0),
 		pci->subsystem_vendor, pci->subsystem_device);
 	return -EBUSY;

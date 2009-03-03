@@ -36,13 +36,6 @@
 #include <media/videobuf-dma-sg.h>
 #include <media/v4l2-chip-ident.h>
 
-#if 0
-#include <media/cx2341x.h>
-#if defined(CONFIG_VIDEO_CX88_DVB) || defined(CONFIG_VIDEO_CX88_DVB_MODULE)
-#include <media/videobuf-dvb.h>
-#endif
-#endif
-
 #include "btcx-risc.h"
 #include "tw68-reg.h"
 //#include "tuner-xc2028.h"
@@ -74,11 +67,6 @@
 
 #define VBI_LINE_COUNT              17
 #define VBI_LINE_LENGTH           2048
-
-/* need "shadow" registers for some write-only ones ... */
-#define SHADOW_AUD_VOL_CTL           1
-#define SHADOW_AUD_BAL_CTL           2
-#define SHADOW_MAX                   3
 
 /* FM Radio deemphasis type */
 enum tw68_deemph_type {
@@ -213,7 +201,6 @@ struct tw68_core {
 	int                        pci_slot;
 	u32                        __iomem *lmmio;
 	u8                         __iomem *bmmio;
-	u32                        shadow[SHADOW_MAX];
 	int                        pci_irqmask;
 
 	/* i2c i/o */
@@ -406,21 +393,21 @@ struct cx6802_dev {
 
 /* ----------------------------------------------------------- */
 /* TODO - probably should use byte access for non-PCI regs     */
-#define tw_readl(reg)             readl(core->lmmio + ((reg)>>2))
-#define	tw_readb(reg)		 readb(core->bmmio + (reg))
-#define tw_writel(reg,value)      writel((value), core->lmmio + ((reg)>>2))
-#define	tw_writeb(reg,value)	 writeb((value), core->bmmio + (reg))
+#define tw_readl(reg)		readl(core->lmmio + ((reg)>>2))
+#define	tw_readb(reg)		readb(core->bmmio + (reg))
+#define tw_writel(reg,value)	writel((value), core->lmmio + ((reg)>>2))
+#define	tw_writeb(reg,value)	writeb((value), core->bmmio + (reg))
 
 #define tw_andorl(reg,mask,value) \
-  writel((readl(core->lmmio+((reg)>>2)) & ~(mask)) |\
-  ((value) & (mask)), core->lmmio+((reg)>>2))
+		writel((readl(core->lmmio+((reg)>>2)) & ~(mask)) |\
+		((value) & (mask)), core->lmmio+((reg)>>2))
 #define	tw_andorb(reg,mask,value) \
-  writeb((readb(core->bmmio+(reg)) & ~(mask)) |\
-  ((value) & (mask)), core->bmmio+(reg))
-#define tw_setl(reg,bit)          tw_andorl((reg),(bit),(bit))
-#define	tw_setb(reg,bit)	  tw_andorb((reg),(bit),(bit))
-#define tw_clearl(reg,bit)        tw_andorl((reg),(bit),0)
-#define	tw_clearb(reg,bit)	  tw_andorl((reg),(bit),0)
+		writeb((readb(core->bmmio+(reg)) & ~(mask)) |\
+		((value) & (mask)), core->bmmio+(reg))
+#define tw_setl(reg,bit)	tw_andorl((reg),(bit),(bit))
+#define	tw_setb(reg,bit)	tw_andorb((reg),(bit),(bit))
+#define tw_clearl(reg,bit)	tw_andorl((reg),(bit),0)
+#define	tw_clearb(reg,bit)	tw_andorl((reg),(bit),0)
 
 /* ----------------------------------------------------------- */
 /* tw68-core.c                                                 */
