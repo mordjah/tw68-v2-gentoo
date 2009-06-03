@@ -1,13 +1,14 @@
 /*
+ *  tw68 driver common header file
  *
- * v4l2 device driver for Techwell 6800 based video capture cards
+ *  Much of this code is derived from the cx88 and sa7134 drivers, which
+ *  were in turn derived from the bt87x driver.  The original work was by
+ *  Gerd Knorr; more recently the code was enhanced by Mauro Carvalho Chehab,
+ *  Hans Verkuil, Andy Walls and many others.  Their work is gratefully
+ *  acknowledged.  Full credit goes to them - any problems within this code
+ *  are mine.
  *
- * (c) 2009 William M. Brack <wbrack@mmm.com.hk>
- *
- * The design and coding of this driver is heavily based upon the cx88
- * driver originally written by Gerd Knorr and modified by Mauro Carvalho
- * Chehab, whose work is gratefully acknowledged.  Full credit goes to
- * them - any problems are mine.
+ *  Copyright (C) 2009  William M. Brack <wbrack@mmm.com.hk>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,538 +22,553 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+ *  02111-1307  USA
  */
+
+#include <linux/version.h>
+#define	TW68_VERSION_CODE	KERNEL_VERSION(0,0,1)
 
 #include <linux/pci.h>
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
-//#include <linux/videodev2.h>
+#include <linux/videodev2.h>
 #include <linux/kdev_t.h>
+#include <linux/input.h>
+#include <linux/notifier.h>
+#include <linux/delay.h>
+#include <linux/mutex.h>
+
+#include <asm/io.h>
+
+#include <media/v4l2-common.h>
+#include <media/v4l2-ioctl.h>
+#include <media/v4l2-device.h>
 
 #include <media/tuner.h>
-#include <media/tveeprom.h>
-#include <media/v4l2-common.h>
+#include <media/ir-common.h>
+#include <media/ir-kbd-i2c.h>
 #include <media/videobuf-dma-sg.h>
-#include <media/v4l2-chip-ident.h>
 
 #include "btcx-risc.h"
 #include "tw68-reg.h"
-//#include "tuner-xc2028.h"
 
-#include <linux/version.h>
-#include <linux/mutex.h>
+#define	UNSET	(-1U)
 
-#define TW68_VERSION_CODE KERNEL_VERSION(0,0,0)
+/* system vendor and device ID's */
+#define	PCI_VENDOR_ID_TECHWELL	0x1797
+#define	PCI_DEVICE_ID_VIDEO1	0x6801
+#define	PCI_DEVICE_ID_AUDIO2	0x6802
+#define	PCI_DEVICE_ID_TS3	0x6803
+#define	PCI_DEVICE_ID_VIDEO4	0x6804
+#define	PCI_DEVICE_ID_AUDIO5	0x6805
+#define	PCI_DEVICE_ID_TS6	0x6806
 
-#define TW68_MAXBOARDS 8
+/* subsystem vendor ID's */
+#define	TW68_PCI_ID_TECHWELL	0x1797
 
-#define UNSET (-1U)
-
-/* Max number of inputs by card */
-#define MAX_TW68_INPUT 4
-
-/* ----------------------------------------------------------- */
-/* defines and enums                                           */
-
-/* Currently unsupported by the driver: PAL/H, NTSC/Kr, SECAM B/G/H/LC */
 #define TW68_NORMS (\
 	V4L2_STD_NTSC_M|  V4L2_STD_NTSC_M_JP|  V4L2_STD_NTSC_443 | \
 	V4L2_STD_PAL_BG|  V4L2_STD_PAL_DK   |  V4L2_STD_PAL_I    | \
 	V4L2_STD_PAL_M |  V4L2_STD_PAL_N    |  V4L2_STD_PAL_Nc   | \
 	V4L2_STD_PAL_60|  V4L2_STD_SECAM_L  |  V4L2_STD_SECAM_DK )
 
-#define FORMAT_FLAGS_PACKED       0x01
-#define FORMAT_FLAGS_PLANAR       0x02
-
-#define VBI_LINE_COUNT              17
-#define VBI_LINE_LENGTH           2048
-
-/* FM Radio deemphasis type */
-enum tw68_deemph_type {
-	FM_NO_DEEMPH = 0,
-	FM_DEEMPH_50,
-	FM_DEEMPH_75
-};
-
-enum tw68_board_type {
-        TW68_BOARD_NONE = 0,
-        TW68_MPEG_DVB,
-        TW68_MPEG_BLACKBIRD
-};
+#define	TW68_VID_INTS	(TW68_FFERR | TW68_PABORT | TW68_DMAPERR | \
+			 TW68_FDMIS | TW68_FFOF   | TW68_DMAPI)
+#define	TW68_I2C_INTS	(TW68_SBERR | TW68_SBDONE | TW68_SBERR2  | \
+			 TW68_SBDONE2)
 
 /* ----------------------------------------------------------- */
 /* static data                                                 */
 
-struct tw6800_fmt {
-	char  *name;
-	u32   fourcc;          /* v4l2 format id */
-	int   depth;
-	int   flags;
-	u32   twformat;
+struct tw68_tvnorm {
+	char		*name;
+	v4l2_std_id	id;
+
+	/* video decoder */
+	unsigned int	sync_control;
+	unsigned int	luma_control;
+	unsigned int	chroma_ctrl1;
+	unsigned int	chroma_gain;
+	unsigned int	chroma_ctrl2;
+	unsigned int	vgate_misc;
+
+	/* video scaler */
+	unsigned int	h_delay;
+	unsigned int	h_start;
+	unsigned int	h_stop;
+	unsigned int	v_delay;
+	unsigned int	video_v_start;
+	unsigned int	video_v_stop;
+	unsigned int	vbi_v_start_0;
+	unsigned int	vbi_v_stop_0;
+	unsigned int	src_timing;
+	unsigned int	vbi_v_start_1;
+
+	/* Techwell specific */
+	unsigned int	format;
 };
 
-struct tw68_ctrl {
-	struct v4l2_queryctrl  v;
-	u32			off;
-	u32			reg;
-	u32			mask;
-	u32			shift;
-	u32			reg2;
-	u32			mask2;
-	u32			shift2;
+struct tw68_format {
+	char		*name;
+	unsigned int	fourcc;
+	unsigned int	depth;
+	u32		twformat;
 };
 
 /* ----------------------------------------------------------- */
-/* card configuration                                          */
+/* card configuration					  */
 
-#define TW68_BOARD_NOAUTO               UNSET
-#define TW68_BOARD_UNKNOWN                  0
-#define	TW68_BOARD_6801			    1
-#define	TW68_BOARD_OTHER		    2
+#define TW68_BOARD_NOAUTO		UNSET
+#define TW68_BOARD_UNKNOWN		0
+#define	TW68_BOARD_GENERIC_6802		1
 
-enum tw68_itype {
-	TW68_VMUX_COMPOSITE1 = 1,
-	TW68_VMUX_COMPOSITE2,
-	TW68_VMUX_COMPOSITE3,
-	TW68_VMUX_COMPOSITE4,
-	TW68_VMUX_SVIDEO,
-	TW68_VMUX_TELEVISION,
-	TW68_VMUX_CABLE,
-	TW68_VMUX_DVB,
-	TW68_VMUX_DEBUG,
-	TW68_RADIO,
+#define	TW68_MAXBOARDS			16
+#define	TW68_INPUT_MAX			8
+
+/* ----------------------------------------------------------- */
+/* enums						       */
+
+enum tw68_mpeg_type {
+	TW68_MPEG_UNUSED,
+	TW68_MPEG_EMPRESS,
+	TW68_MPEG_DVB,
 };
 
+enum tw68_audio_in {
+	TV      = 1,
+	LINE1   = 2,
+	LINE2   = 3,
+	LINE2_LEFT,
+};
+
+enum tw68_video_out {
+	CCIR656 = 1,
+};
+
+/* Structs for card definition */
 struct tw68_input {
-	enum tw68_itype type;
-	u32             gpio0, gpio1, gpio2, gpio3;
-	unsigned int    vmux:2;
-	unsigned int    audioroute:4;
+	char			*name;		/* text description */
+	unsigned int		vmux;		/* mux value */
+	enum tw68_audio_in	mux;
+	unsigned int		gpio;
+	unsigned int		tv:1;
 };
 
 struct tw68_board {
-	char                    *name;
-	unsigned int            tuner_type;
+	char			*name;
+	unsigned int		audio_clock;
+
+	/* input switching */
+	unsigned int		gpiomask;
+	struct tw68_input	inputs[TW68_INPUT_MAX];
+	struct tw68_input	radio;
+	struct tw68_input	mute;
+
+	/* i2c chip info */
+	unsigned int		tuner_type;
 	unsigned int		radio_type;
 	unsigned char		tuner_addr;
 	unsigned char		radio_addr;
-	int                     tda9887_conf;
-	struct tw68_input       input[MAX_TW68_INPUT];
-	struct tw68_input       radio;
-	enum tw68_board_type    mpeg;
-	unsigned int            audio_chip;
-	int			num_frontends;
+
+	unsigned int		tda9887_conf;
+	unsigned int		tuner_config;
+
+	enum tw68_video_out	video_out;
+	enum tw68_mpeg_type	mpeg;
+	unsigned int		vid_port_opts;
 };
 
-struct tw68_subid {
-	u16     subvendor;
-	u16     subdevice;
-	u32     card;
-};
-
-#define INPUT(nr) (core->board.input[nr])
-
-/* ----------------------------------------------------------- */
-/* Interrupts enabled and handled by the video module          */
-#define	TW68_VID_INTS	(TW68_PABORT | TW68_DMAPERR | TW68_FDMIS | \
-			 TW68_FFOF | TW68_DMAPI)
+#define card_has_radio(dev)	(NULL != tw68_boards[dev->board].radio.name)
+#define card_has_mpeg(dev)	(TW68_MPEG_UNUSED != \
+					tw68_boards[dev->board].mpeg)
+#define card_in(dev,n)		(tw68_boards[dev->board].inputs[n])
+#define card(dev)		(tw68_boards[dev->board])
 
 /* ----------------------------------------------------------- */
 /* device / file handle status                                 */
 
-#define RESOURCE_OVERLAY       1
-#define RESOURCE_VIDEO         2
-#define RESOURCE_VBI           4
+#define	RESOURCE_OVERLAY		1
+#define	RESOURCE_VIDEO			2
+#define	RESOURCE_VBI			4
 
-#define BUFFER_TIMEOUT     msecs_to_jiffies(500)  /* 0.5 seconds */
+#define	INTERLACE_AUTO			0
+#define	INTERLACE_ON			1
+#define	INTERLACE_OFF			2
 
-/* buffer for one video frame */
-struct tw68_norm;
-struct tw68_buffer {
+#define	BUFFER_TIMEOUT	msecs_to_jiffies(500)	/* 0.5 seconds */
+
+struct tw68_dev;	/* forward delclaration */
+
+/* tvaudio thread status */
+struct tw68_thread {
+	struct task_struct	*thread;
+	unsigned int		scan1;
+	unsigned int		scan2;
+	unsigned int		mode;
+	unsigned int		stopped;
+};
+
+/* buffer for one video/vbi/ts frame */
+struct tw68_buf {
 	/* common v4l buffer stuff -- must be first */
 	struct videobuf_buffer vb;
 
 	/* tw68 specific */
-	unsigned int           bpl;
-	struct btcx_riscmem    risc;
-	struct tw6800_fmt      *fmt;
-	u32                    count;
+	struct tw68_format	*fmt;
+	unsigned int		top_seen;
+	int (*activate)(struct tw68_dev *dev,
+			struct tw68_buf *buf,
+			struct tw68_buf *next);
+	struct btcx_riscmem	risc;
+	unsigned int		bpl;
 };
 
 struct tw68_dmaqueue {
-	struct list_head       active;
-	struct list_head       queued;
-	struct timer_list      timeout;
-	struct btcx_riscmem    stopper;
-	u32                    count;
+	struct tw68_dev		*dev;
+	struct list_head	active;
+	struct list_head	queued;
+	struct timer_list	timeout;
+	struct btcx_riscmem	stopper;
+	int (*buf_compat)(struct tw68_buf *prev,
+			  struct tw68_buf *buf);
+	int (*start_dma)(struct tw68_dev *dev,
+			 struct tw68_dmaqueue *q,
+			 struct tw68_buf *buf);
 };
 
-struct tw68_core {
-	struct list_head           devlist;
-	atomic_t                   refcount;
-
-	/* board name */
-	int                        nr;
-	char                       name[32];
-
-	/* pci stuff */
-	int                        pci_bus;
-	int                        pci_slot;
-	u32                        __iomem *lmmio;
-	u8                         __iomem *bmmio;
-	int                        pci_irqmask;
-
-	/* i2c i/o */
-	struct i2c_adapter         i2c_adap;
-	struct i2c_algo_bit_data   i2c_algo;
-	struct i2c_client          i2c_client;
-	u32                        i2c_state, i2c_rc;
-
-	/* config info -- analog */
-	unsigned int               boardnr;
-	struct tw68_board	   board;
-
-	/* Supported V4L _STD_ tuner formats */
-	unsigned int               tuner_formats;
-
-	/* config info -- dvb */
-#if defined(CONFIG_VIDEO_TW68_DVB) || defined(CONFIG_VIDEO_TW68_DVB_MODULE)
-	int 			   (*prev_set_voltage)(struct dvb_frontend* fe, fe_sec_voltage_t voltage);
-#endif
-
-	/* state info */
-	struct task_struct         *kthread;
-	struct tw68_norm	   *tvnorm;
-	u32                        tvaudio;
-	u32                        audiomode_manual;
-	u32                        audiomode_current;
-	u32                        input;
-	u32                        astat;
-	u32			   use_nicam;
-
-	/* IR remote control state */
-	struct tw68_IR             *ir;
-
-	struct mutex               lock;
-	/* various v4l controls */
-	u32                        freq;
-	atomic_t		   users;
-	atomic_t                   mpeg_users;
-
-	/* tw68-video needs to access cx6802 for hybrid tuner pll access. */
-	struct cx6802_dev          *dvbdev;
-	enum tw68_board_type       active_type_id;
-	int			   active_ref;
-	int			   active_fe_id;
-};
-
-struct tw6800_dev;
-//struct cx6802_dev;
-
-/* ----------------------------------------------------------- */
-/* function 0: video stuff                                     */
-
-struct tw68_norm {
-	v4l2_std_id		v4l2_id;
-	u32			format;
-	u16			swidth;
-	u16			sheight;
-	u16			hdelay;
-	u16			vdelay;
-};
-
-struct tw6800_fh {
-	struct tw6800_dev          *dev;
-	enum v4l2_buf_type         type;
-	int                        radio;
-	unsigned int               resources;
+/* video filehandle status */
+struct tw68_fh {
+	struct tw68_dev		*dev;
+	unsigned int		radio;
+	enum v4l2_buf_type	type;
+	unsigned int		resources;
+	enum v4l2_priority	prio;
 
 	/* video overlay */
-	struct v4l2_window         win;
-	struct v4l2_clip           *clips;
-	unsigned int               nclips;
+	struct v4l2_window	win;
+	struct v4l2_clip	clips[8];
+	unsigned int		nclips;
 
 	/* video capture */
-	struct tw6800_fmt          *fmt;
-	unsigned int               width;
-	unsigned int		   height;
-	struct videobuf_queue      vidq;
+	struct tw68_format	*fmt;
+	unsigned int		width,height;
+	struct videobuf_queue	cap;
 
 	/* vbi capture */
-	struct videobuf_queue      vbiq;
+	struct videobuf_queue	vbi;
 };
 
-struct tw6800_suspend_state {
-	int                        disabled;
+/* dmasound dsp status */
+struct tw68_dmasound {
+	struct mutex		lock;
+	int			minor_mixer;
+	int			minor_dsp;
+	unsigned int		users_dsp;
+
+	/* mixer */
+	enum tw68_audio_in	input;
+	unsigned int		count;
+	unsigned int		line1;
+	unsigned int		line2;
+
+	/* dsp */
+	unsigned int		afmt;
+	unsigned int		rate;
+	unsigned int		channels;
+	unsigned int		recording_on;
+	unsigned int		dma_running;
+	unsigned int		blocks;
+	unsigned int		blksize;
+	unsigned int		bufsize;
+	struct videobuf_dmabuf	dma;
+	unsigned int		dma_blk;
+	unsigned int		read_offset;
+	unsigned int		read_count;
+	void *				priv_data;
+	struct snd_pcm_substream	*substream;
 };
 
-struct tw6800_dev {
-	struct tw68_core           *core;
-	struct list_head           devlist;
-	spinlock_t                 slock;
+struct tw68_fmt {
+	char			*name;
+	u32			fourcc;	/* v4l2 format id */
+	int			depth;
+	int			flags;
+	u32			twformat;
+};
+
+/* ts/mpeg status */
+struct tw68_ts {
+	/* TS capture */
+	int			nr_packets;
+	int			nr_bufs;
+};
+
+/* ts/mpeg ops */
+struct tw68_mpeg_ops {
+	enum tw68_mpeg_type	type;
+	struct list_head	next;
+	int			(*init)(struct tw68_dev *dev);
+	int			(*fini)(struct tw68_dev *dev);
+	void			(*signal_change)(struct tw68_dev *dev);
+};
+
+enum tw68_ts_status {
+	TW68_TS_STOPPED,
+	TW68_TS_BUFF_DONE,
+	TW68_TS_STARTED,
+};
+
+/* global device status */
+struct tw68_dev {
+	struct list_head	devlist;
+	struct mutex		lock;
+	spinlock_t		slock;
+	struct v4l2_prio_state	prio;
+	struct v4l2_device	v4l2_dev;
+	/* workstruct for loading modules */
+	struct work_struct request_module_wk;
+
+	/* insmod option/autodetected */
+	int			autodetected;
 
 	/* various device info */
-	unsigned int               resources;
-	struct video_device        *video_dev;
-	struct video_device        *vbi_dev;
-	struct video_device        *radio_dev;
+	unsigned int		resources;
+	struct video_device	*video_dev;
+	struct video_device	*radio_dev;
+	struct video_device	*vbi_dev;
+	struct tw68_dmasound	dmasound;
+
+	/* infrared remote */
+	int			has_remote;
+	struct card_ir		*remote;
 
 	/* pci i/o */
-	struct pci_dev             *pci;
-	unsigned char              pci_rev,pci_lat;
+	char			name[32];
+	int			nr;
+	struct pci_dev		*pci;
+	unsigned char		pci_rev,pci_lat;
+	u32			__iomem *lmmio;
+	u8			__iomem *bmmio;
+	u32			pci_irqmask;
+
+	/* config info */
+	unsigned int		board;
+	unsigned int		tuner_type;
+	unsigned int 		radio_type;
+	unsigned char		tuner_addr;
+	unsigned char		radio_addr;
+
+	unsigned int		tda9887_conf;
+	unsigned int		gpio_value;
+
+	/* i2c i/o */
+	struct i2c_algo_bit_data i2c_algo;
+	struct i2c_adapter	i2c_adap;
+	struct i2c_client	i2c_client;
+	u32			i2c_state;
+//	int			use_i2c_hw;
+//	int			i2c_rc;
+	u32			i2c_done;
+	wait_queue_head_t	i2c_queue;
+	unsigned char		eedata[256];
 
 
-	/* capture queues */
-	struct tw68_dmaqueue       vidq;
-	struct tw68_dmaqueue       vbiq;
+	/* video overlay */
+	struct v4l2_framebuffer	ovbuf;
+	struct tw68_format	*ovfmt;
+	unsigned int		ovenable;
+	enum v4l2_field		ovfield;
+
+	/* video+ts+vbi capture */
+	struct tw68_dmaqueue	video_q;
+	struct tw68_dmaqueue	vbi_q;
+	unsigned int		video_fieldcount;
+	unsigned int		vbi_fieldcount;
 
 	/* various v4l controls */
-
-	/* other global state info */
-	struct tw6800_suspend_state state;
-};
-
+	struct tw68_tvnorm	*tvnorm;	/* video */
+	struct tw68_tvaudio	*tvaudio;
+	unsigned int		ctl_input;
 #if 0
-/* ----------------------------------------------------------- */
-/* function 1: audio/alsa stuff                                */
-/* =============> moved to tw68-alsa.c <====================== */
+	int			ctl_bright;
+	int			ctl_contrast;
+	int			ctl_hue;
+	int			ctl_saturation;
+	int			ctl_freq;
+	int			ctl_mute;	/* audio */
+	int			ctl_volume;
+	int			ctl_invert;	/* private */
+	int			ctl_mirror;
+	int			ctl_y_odd;
+	int			ctl_y_even;
+	int			ctl_automute;
+#endif
 
-
-/* ----------------------------------------------------------- */
-/* function 2: mpeg stuff                                      */
-
-struct cx6802_fh {
-	struct cx6802_dev          *dev;
-	struct videobuf_queue      mpegq;
-};
-
-struct cx6802_suspend_state {
-	int                        disabled;
-};
-
-struct cx6802_driver {
-	struct tw68_core *core;
-
-	/* List of drivers attached to device */
-	struct list_head drvlist;
-
-	/* Type of driver and access required */
-	enum tw68_board_type type_id;
-//	enum cx6802_board_access hw_access;
-
-	/* MPEG 8802 internal only */
-	int (*suspend)(struct pci_dev *pci_dev, pm_message_t state);
-	int (*resume)(struct pci_dev *pci_dev);
-
-	/* MPEG 8802 -> mini driver - Driver probe and configuration */
-	int (*probe)(struct cx6802_driver *drv);
-	int (*remove)(struct cx6802_driver *drv);
-
-	/* MPEG 8802 -> mini driver - Access for hardware control */
-	int (*advise_acquire)(struct cx6802_driver *drv);
-	int (*advise_release)(struct cx6802_driver *drv);
-
-	/* MPEG 8802 <- mini driver - Access for hardware control */
-	int (*request_acquire)(struct cx6802_driver *drv);
-	int (*request_release)(struct cx6802_driver *drv);
-};
-
-struct cx6802_dev {
-	struct tw68_core           *core;
-	spinlock_t                 slock;
-
-	/* pci i/o */
-	struct pci_dev             *pci;
-	unsigned char              pci_rev,pci_lat;
-
-	/* dma queues */
-	struct tw68_dmaqueue       mpegq;
-	u32                        ts_packet_size;
-	u32                        ts_packet_count;
+	/* crop */
+	struct v4l2_rect	crop_bounds;
+	struct v4l2_rect	crop_defrect;
+	struct v4l2_rect	crop_current;
 
 	/* other global state info */
-	struct cx6802_suspend_state state;
+	unsigned int		automute;
+	struct tw68_thread	thread;
+	struct tw68_input	*input;
+	struct tw68_input	*hw_input;
+	unsigned int		hw_mute;
+	int			last_carrier;
+	int			nosignal;
+	unsigned int		insuspend;
 
-	/* for blackbird only */
-	struct list_head           devlist;
+	/* TW68_MPEG_* */
+	struct tw68_ts		ts;
+	struct tw68_dmaqueue	ts_q;
+	enum tw68_ts_status 	ts_state;
+	unsigned int 		buff_cnt;
+	struct tw68_mpeg_ops	*mops;
 
-#if defined(CONFIG_VIDEO_TW68_DVB) || defined(CONFIG_VIDEO_TW68_DVB_MODULE)
-	/* for dvb only */
-	struct videobuf_dvb_frontends frontends;
-#endif
-
-	/* for switching modulation types */
-	unsigned char              ts_gen_cntrl;
-
-	/* List of attached drivers */
-	struct list_head	   drvlist;
-	struct work_struct	   request_module_wk;
+	void (*gate_ctrl)(struct tw68_dev *dev, int open);
 };
-#endif
 
 /* ----------------------------------------------------------- */
-/* TODO - probably should use byte access for non-PCI regs     */
-#define tw_readl(reg)		readl(core->lmmio + ((reg)>>2))
-#define	tw_readb(reg)		readb(core->bmmio + (reg))
-#define tw_writel(reg,value)	writel((value), core->lmmio + ((reg)>>2))
-#define	tw_writeb(reg,value)	writeb((value), core->bmmio + (reg))
+
+#define tw_readl(reg)		readl(dev->lmmio + ((reg)>>2))
+#define	tw_readb(reg)		readb(dev->bmmio + (reg))
+#define tw_writel(reg,value)	writel((value), dev->lmmio + ((reg)>>2))
+#define	tw_writeb(reg,value)	writeb((value), dev->bmmio + (reg))
 
 #define tw_andorl(reg,mask,value) \
-		writel((readl(core->lmmio+((reg)>>2)) & ~(mask)) |\
-		((value) & (mask)), core->lmmio+((reg)>>2))
+		writel((readl(dev->lmmio+((reg)>>2)) & ~(mask)) |\
+		((value) & (mask)), dev->lmmio+((reg)>>2))
 #define	tw_andorb(reg,mask,value) \
-		writeb((readb(core->bmmio+(reg)) & ~(mask)) |\
-		((value) & (mask)), core->bmmio+(reg))
+		writeb((readb(dev->bmmio+(reg)) & ~(mask)) |\
+		((value) & (mask)), dev->bmmio+(reg))
 #define tw_setl(reg,bit)	tw_andorl((reg),(bit),(bit))
 #define	tw_setb(reg,bit)	tw_andorb((reg),(bit),(bit))
-#define tw_clearl(reg,bit)	tw_andorl((reg),(bit),0)
-#define	tw_clearb(reg,bit)	tw_andorl((reg),(bit),0)
+#define	tw_clearl(reg,bit)	\
+		writel((readl(dev->lmmio+((reg)>>2)) & ~(bit)), \
+		dev->lmmio+((reg)>>2))
+#define	tw_clearb(reg,bit)	\
+		writeb((readb(dev->bmmio+((reg)>>2)) & ~(bit)), \
+		dev->bmmio+((reg)>>2))
+#define tw_call_all(dev, o, f, args...) do {				\
+	if (dev->gate_ctrl)						\
+		dev->gate_ctrl(dev, 1);					\
+	v4l2_device_call_all(&(dev)->v4l2_dev, 0, o, f , ##args);	\
+	if (dev->gate_ctrl)						\
+		dev->gate_ctrl(dev, 0);					\
+} while (0)
+
+#define tw_wait(us) { udelay(us); }
+
+static inline struct tw68_dev *to_tw68_dev(struct v4l2_device *v4l2_dev)
+{
+	return container_of(v4l2_dev, struct tw68_dev, v4l2_dev);
+}
 
 /* ----------------------------------------------------------- */
-/* tw68-core.c                                                 */
+/* tw68-core.c                                                */
 
-extern void tw68_print_irqbits(char *name, char *tag, char **strings,
-			       int len, u32 bits, u32 mask);
+extern struct list_head  tw68_devlist;
+extern struct mutex tw68_devlist_lock;
+extern int tw68_no_overlay;
+extern unsigned int irq_debug;
 
-extern int tw68_core_irq(struct tw68_core *core, u32 status);
-extern void tw68_wakeup(struct tw68_core *core,
-			struct tw68_dmaqueue *q, u32 count);
-extern void tw68_shutdown(struct tw68_core *core);
-extern int tw68_reset(struct tw68_core *core);
-
-extern int
-tw68_risc_buffer(struct pci_dev *pci, struct btcx_riscmem *risc,
-		 struct scatterlist *sglist,
-		 unsigned int top_offset, unsigned int bottom_offset,
-		 unsigned int bpl, unsigned int padding, unsigned int lines);
-extern int
-tw68_risc_databuffer(struct pci_dev *pci, struct btcx_riscmem *risc,
-		     struct scatterlist *sglist, unsigned int bpl,
-		     unsigned int lines, unsigned int lpi);
-extern int
-tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc);
-extern void
-tw68_free_buffer(struct videobuf_queue *q, struct tw68_buffer *buf);
-
-extern void tw68_risc_disasm(struct tw68_core *core,
-			     struct btcx_riscmem *risc);
-
-#if 0
-extern int tw68_sram_channel_setup(struct tw68_core *core,
-				   struct sram_channel *ch,
-				   unsigned int bpl, u32 risc);
-extern void tw68_sram_channel_dump(struct tw68_core *core,
-				   struct sram_channel *ch);
-#endif
-
-extern void tw68_risc_program_dump(struct tw68_core *core,
-				   struct btcx_riscmem *risc);
-
-extern int tw68_set_scale(struct tw68_core *core, unsigned int width,
-			  unsigned int height, enum v4l2_field field);
-extern int tw68_set_tvnorm(struct tw68_core *core, v4l2_std_id norm);
-
-extern struct video_device *tw68_vdev_init(struct tw68_core *core,
-					   struct pci_dev *pci,
-					   struct video_device *template,
-					   char *type);
-extern struct tw68_core* tw68_core_get(struct pci_dev *pci);
-extern void tw68_core_put(struct tw68_core *core,
-			  struct pci_dev *pci);
-
-extern int tw68_start_audio_dma(struct tw68_core *core);
-extern int tw68_stop_audio_dma(struct tw68_core *core);
-
-
-/* ----------------------------------------------------------- */
-/* tw68-vbi.c                                                  */
-
-/* Can be used as g_vbi_fmt, try_vbi_fmt and s_vbi_fmt */
-int tw6800_vbi_fmt (struct file *file, void *priv,
-					struct v4l2_format *f);
-
-/*
-int tw6800_start_vbi_dma(struct tw6800_dev    *dev,
-			 struct tw68_dmaqueue *q,
-			 struct tw68_buffer   *buf);
-*/
-int tw6800_stop_vbi_dma(struct tw6800_dev *dev);
-int tw6800_restart_vbi_queue(struct tw6800_dev    *dev,
-			     struct tw68_dmaqueue *q);
-void tw6800_vbi_timeout(unsigned long data);
-
-extern struct videobuf_queue_ops tw6800_vbi_qops;
-
-/* ----------------------------------------------------------- */
-/* tw68-i2c.c                                                  */
-
-extern int tw68_i2c_init(struct tw68_core *core, struct pci_dev *pci);
-extern void tw68_call_i2c_clients(struct tw68_core *core,
-				  unsigned int cmd, void *arg);
-
+int tw68_buffer_count(unsigned int size, unsigned int count);
+void tw68_buffer_queue(struct tw68_dev *dev, struct tw68_dmaqueue *q,
+		      struct tw68_buf *buf);
+void tw68_buffer_timeout(unsigned long data);
+int tw68_set_dmabits(struct tw68_dev *dev);
+void tw68_dma_free(struct videobuf_queue *q, struct tw68_buf *buf);
+void tw68_wakeup(struct tw68_dmaqueue *q, unsigned int *field_count);
+int tw68_buffer_requeue(struct tw68_dev *dev, struct tw68_dmaqueue *q);
 
 /* ----------------------------------------------------------- */
 /* tw68-cards.c                                                */
 
-extern int tw68_tuner_callback(void *dev, int component, int command/*, int arg*/);
-extern int tw68_get_resources(const struct tw68_core *core,
-			      struct pci_dev *pci);
-extern struct tw68_core *tw68_core_create(struct pci_dev *pci, int nr);
-//extern void tw68_setup_xc3028(struct tw68_core *core, struct xc2028_ctrl *ctl);
+extern struct tw68_board tw68_boards[];
+extern const unsigned int tw68_bcount;
+extern struct pci_device_id __devinitdata tw68_pci_tbl[];
+
+int tw68_board_init1(struct tw68_dev *dev);
+int tw68_board_init2(struct tw68_dev *dev);
+int tw68_tuner_callback(void *priv, int component, int command, int arg);
 
 /* ----------------------------------------------------------- */
-/* tw68-tvaudio.c                                              */
+/* tw68-i2c.c                                                  */
 
-#define WW_NONE		 1
-#define WW_BTSC		 2
-#define WW_BG		 3
-#define WW_DK		 4
-#define WW_I		 5
-#define WW_L		 6
-#define WW_EIAJ		 7
-#define WW_I2SPT	 8
-#define WW_FM		 9
-#define WW_I2SADC	 10
+int tw68_i2c_register(struct tw68_dev *dev);
+int tw68_i2c_unregister(struct tw68_dev *dev);
 
-void tw68_set_tvaudio(struct tw68_core *core);
-void tw68_newstation(struct tw68_core *core);
-void tw68_get_stereo(struct tw68_core *core, struct v4l2_tuner *t);
-void tw68_set_stereo(struct tw68_core *core, u32 mode, int manual);
-int tw68_audio_thread(void *data);
+/* ----------------------------------------------------------- */
+/* tw68-video.c                                                */
 
-#if 0
-int cx6802_register_driver(struct cx6802_driver *drv);
-int cx6802_unregister_driver(struct cx6802_driver *drv);
-struct cx6802_dev * cx6802_get_device(struct inode *inode);
-struct cx6802_driver * cx6802_get_driver(struct cx6802_dev *dev, enum tw68_board_type btype);
+extern unsigned int video_debug;
+extern struct video_device tw68_video_template;
+extern struct video_device tw68_radio_template;
+
+int tw68_videoport_init(struct tw68_dev *dev);
+void tw68_set_tvnorm_hw(struct tw68_dev *dev);
+
+int tw68_video_init1(struct tw68_dev *dev);
+int tw68_video_init2(struct tw68_dev *dev);
+void tw68_irq_video_signalchange(struct tw68_dev *dev);
+void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status);
+
+/* ----------------------------------------------------------- */
+/* tw68-ts.c                                                   */
+
+int tw68_ts_init1(struct tw68_dev *dev);
+int tw68_ts_fini(struct tw68_dev *dev);
+void tw68_irq_ts_done(struct tw68_dev *dev, unsigned long status);
+
+int tw68_ts_register(struct tw68_mpeg_ops *ops);
+void tw68_ts_unregister(struct tw68_mpeg_ops *ops);
+
+int tw68_ts_init_hw(struct tw68_dev *dev);
+
+/* ----------------------------------------------------------- */
+/* tw68-vbi.c                                                  */
+
+extern struct videobuf_queue_ops tw68_vbi_qops;
+extern struct video_device tw68_vbi_template;
+
+int tw68_vbi_init1(struct tw68_dev *dev);
+int tw68_vbi_fini(struct tw68_dev *dev);
+void tw68_irq_vbi_done(struct tw68_dev *dev, unsigned long status);
 
 /* ----------------------------------------------------------- */
 /* tw68-input.c                                                */
 
-int tw68_ir_init(struct tw68_core *core, struct pci_dev *pci);
-int tw68_ir_fini(struct tw68_core *core);
-void tw68_ir_irq(struct tw68_core *core);
-void tw68_ir_start(struct tw68_core *core, struct tw68_IR *ir);
-void tw68_ir_stop(struct tw68_core *core, struct tw68_IR *ir);
+int tw68_input_init1(struct tw68_dev *dev);
+void tw68_input_fini(struct tw68_dev *dev);
+void tw68_input_irq(struct tw68_dev *dev);
+void tw68_set_i2c_ir(struct tw68_dev *dev, struct IR_i2c *ir);
+void tw68_ir_start(struct tw68_dev *dev, struct card_ir *ir);
+void tw68_ir_stop(struct tw68_dev *dev);
 
 /* ----------------------------------------------------------- */
-/* tw68-mpeg.c                                                 */
+/* tw68-tvaudio.c                                              */
 
-int cx6802_buf_prepare(struct videobuf_queue *q,struct cx6802_dev *dev,
-			struct tw68_buffer *buf, enum v4l2_field field);
-void cx6802_buf_queue(struct cx6802_dev *dev, struct tw68_buffer *buf);
-void cx6802_cancel_buffers(struct cx6802_dev *dev);
-#endif
+int tw68_tvaudio_rx2mode(u32 rx);
+
+void tw68_tvaudio_setmute(struct tw68_dev *dev);
+void tw68_tvaudio_setinput(struct tw68_dev *dev,
+			      struct tw68_input *in);
+void tw68_tvaudio_setvolume(struct tw68_dev *dev, int level);
+int tw68_tvaudio_getstereo(struct tw68_dev *dev);
+void tw68_tvaudio_init(struct tw68_dev *dev);
+int tw68_tvaudio_init2(struct tw68_dev *dev);
+int tw68_tvaudio_fini(struct tw68_dev *dev);
+int tw68_tvaudio_do_scan(struct tw68_dev *dev);
+int tw_dsp_writel(struct tw68_dev *dev, int reg, u32 value);
+void tw68_enable_i2s(struct tw68_dev *dev);
 
 /* ----------------------------------------------------------- */
-/* tw68-video.c*/
-extern const u32 tw68_user_ctrls[];
-extern int tw6800_ctrl_query(struct tw68_core *core,
-			     struct v4l2_queryctrl *qctrl);
-int tw68_enum_input (struct tw68_core  *core,struct v4l2_input *i);
-int tw68_set_freq (struct tw68_core  *core,struct v4l2_frequency *f);
-int tw68_get_control(struct tw68_core *core, struct v4l2_control *ctl);
-int tw68_set_control(struct tw68_core *core, struct v4l2_control *ctl);
-int tw68_video_mux(struct tw68_core *core, unsigned int input);
+/* tw68-risc.c                                                 */
 
+int tw68_risc_buffer(struct pci_dev *pci, struct btcx_riscmem *risc,
+	struct scatterlist *sglist, unsigned int top_offset,
+	unsigned int bottom_offset, unsigned int bpl,
+	unsigned int padding, unsigned int lines);
+int tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc);

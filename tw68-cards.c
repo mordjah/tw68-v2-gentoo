@@ -1,14 +1,14 @@
 /*
+ *  device driver for Techwell 68xx based cards
+ *  
+ *  Much of this code is derived from the cx88 and sa7134 drivers, which
+ *  were in turn derived from the bt87x driver.  The original work was by
+ *  Gerd Knorr; more recently the code was enhanced by Mauro Carvalho Chehab,
+ *  Hans Verkuil, Andy Walls and many others.  Their work is gratefully
+ *  acknowledged.  Full credit goes to them - any problems within this code
+ *  are mine.
  *
- * device driver for Techwell 6800 based video capture cards
- * card-specific stuff.
- *
- * (c) 2009 William M. Brack <wbrack@mmm.com.hk>
- *
- * The design and coding of this driver is heavily based upon the
- * cx88 driver originally written by Gerd Knorr and modified by
- * Mauro Carvalho Chehab, whose work is gratefully acknowledged.
- * Full credit goes to them - any problems are mine.
+ *  Copyright (C) 2009  William M. Brack <wbrack@mmm.com.hk>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -22,235 +22,116 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+ *  02111-1307  USA
  */
 
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/pci.h>
-#include <linux/delay.h>
+#include <linux/i2c.h>		/* must appear before i2c-algo-bit.h */
+#include <linux/i2c-algo-bit.h>
+
+#include <media/v4l2-common.h>
+#include <media/tveeprom.h>
 
 #include "tw68.h"
+#include "tw68-reg.h"
 
-static unsigned int card[] = {[0 ... (TW68_MAXBOARDS - 1)] = UNSET };
-
-module_param_array (card, int, NULL, 0444);
-
-MODULE_PARM_DESC (card, "card type");
-
-static unsigned int latency = UNSET;
-module_param (latency, int, 0444);
-MODULE_PARM_DESC (latency, "pci latency timer");
-
-#define info_printk(core, fmt, arg...) \
-		printk(KERN_INFO "%s: " fmt, core->name , ## arg)
-
-#define warn_printk(core, fmt, arg...) \
-		printk(KERN_WARNING "%s: " fmt, core->name , ## arg)
-
-#define err_printk(core, fmt, arg...) \
-		printk(KERN_ERR "%s: " fmt, core->name , ## arg)
-
+/* commly used strings */
+#if 0
+static char name_mute[]    = "mute";
+static char name_radio[]   = "Radio";
+static char name_tv[]      = "Television";
+static char name_tv_mono[] = "TV (mono only)";
+static char name_svideo[]  = "S-Video";
+static char name_comp[]    = "Composite";
+#endif
+static char name_comp1[]   = "Composite1";
+static char name_comp2[]   = "Composite2";
+static char name_comp3[]   = "Composite3";
+static char name_comp4[]   = "Composite4";
 
 /* ------------------------------------------------------------------ */
-/* board config info */
+/* board config info                                                  */
 
-static const struct tw68_board tw68_boards[] = {
+/* If radio_type !=UNSET, radio_addr should be specified
+ */
+
+struct tw68_board tw68_boards[] = {
 	[TW68_BOARD_UNKNOWN] = {
-		.name = "UNKNOWN/GENERIC",
-		.tuner_type = UNSET,
-		.radio_type = UNSET,
-		.tuner_addr = ADDR_UNSET,
-		.radio_addr = ADDR_UNSET,
-		.input = { {
-			.type =
-			TW68_VMUX_COMPOSITE1,
+		.name		= "GENERIC",
+		.tuner_type	= TUNER_ABSENT,
+		.radio_type     = UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+
+		.inputs         = {{
+			.name = name_comp1,
 			.vmux = 0,
-		}, {
-			.type =
-			TW68_VMUX_COMPOSITE2,
+		},{
+			.name = name_comp2,
 			.vmux = 1,
-		}, {
-			.type =
-			TW68_VMUX_COMPOSITE3,
+		},{
+			.name = name_comp3,
 			.vmux = 2,
-		}, {
-			.type =
-			TW68_VMUX_COMPOSITE4,
+		},{
+			.name = name_comp4,
 			.vmux = 3,
-		}, },
-	},
-	[TW68_BOARD_6801] = {
-		.name = "TW6801/GENERIC",
-		.tuner_type = UNSET,
-		.radio_type = UNSET,
-		.tuner_addr = ADDR_UNSET,
-		.radio_addr = ADDR_UNSET,
-		.input = { {
-			.type =
-			TW68_VMUX_COMPOSITE1,
-			.vmux = 0,
-		}, {
-			.type =
-			TW68_VMUX_COMPOSITE2,
-			.vmux = 1,
-		}, {
-			.type =
-			TW68_VMUX_COMPOSITE3,
-			.vmux = 2,
-		}, {
-			.type =
-			TW68_VMUX_COMPOSITE4,
-			.vmux = 3,
-		} },
+		}},
 	},
 };
 
-/* ------------------------------------------------------------------*/
-/* PCI subsystem IDs */
+const unsigned int tw68_bcount = ARRAY_SIZE(tw68_boards);
 
-static const struct tw68_subid tw68_subids[] = {
+/*
+ * Please add any new PCI IDs to: http://pci-ids.ucw.cz.  This keeps
+ * the PCI ID database up to date.  Note that the entries must be
+ * added under vendor 0x1797 (Techwell Inc.) as subsystem IDs.
+ */
+struct pci_device_id tw68_pci_tbl[] = {
 	{
-		.subvendor = 0x0000,
-		.subdevice = 0x0000,
-		.card = TW68_BOARD_6801,
-	},
-};
-
-/* -----------------------------------------------------------------------*/
-
-static void
-tw68_card_list (struct tw68_core *core, struct pci_dev *pci)
-{
-	int     i;
-
-	if (0 == pci->subsystem_vendor && 0 == pci->subsystem_device) {
-		printk (KERN_ERR
-			"%s: Your board has no valid PCI Subsystem ID "
-			"and thus can't\n"
-			"%s: be autodetected.  Please pass card=<n> "
-			"insmod option to\n"
-			"%s: workaround that.  Redirect complaints to "
-			"the vendor of\n"
-			"%s: the TV card.  Best regards,\n"
-			"%s:         -- tw6800\n",
-			core->name, core->name, core->name,
-			core->name, core->name);
-	} else {
-		printk (KERN_ERR
-			"%s: Your board isn't known (yet) to the "
-			"driver.  You can\n"
-			"%s: try to pick one of the existing card "
-			"configs via\n"
-			"%s: card=<n> insmod option.  Updating to the "
-			"latest\n"
-			"%s: version might help as well.\n",
-			core->name, core->name, core->name,
-			core->name);
+		.vendor		= PCI_VENDOR_ID_TECHWELL,
+		.device		= PCI_DEVICE_ID_VIDEO1,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= PCI_ANY_ID,
+		.driver_data	= TW68_BOARD_UNKNOWN,
+	},{
+		.vendor		= PCI_VENDOR_ID_TECHWELL,
+		.device		= PCI_DEVICE_ID_VIDEO4,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= PCI_ANY_ID,
+		.driver_data	= TW68_BOARD_UNKNOWN,
+	},{
+		/* end of list */
 	}
-	err_printk (core,
-		"Here is a list of valid choices for the card=<n> "
-		"insmod option:\n");
-	for (i = 0; i < ARRAY_SIZE (tw68_boards); i++)
-		printk (KERN_ERR "%s:    card=%d -> %s\n",
-			core->name, i, tw68_boards[i].name);
-}
+};
+MODULE_DEVICE_TABLE(pci, tw68_pci_tbl);
 
-/* ------------------------------------------------------------------*/
-
-static int tw68_pci_quirks (const char *name, struct pci_dev *pci)
+/* ------------------------------------------------------------ */
+/* stuff done before i2c enabled */
+int tw68_board_init1(struct tw68_dev *dev)
 {
-	unsigned int lat = UNSET;
-
-	/* check insmod options */
-	if (UNSET != latency)
-		lat = latency;
-
-	if (UNSET != lat) {
-		printk (KERN_INFO
-			"%s: setting pci latency timer to %d\n", name,
-			latency);
-		pci_write_config_byte (pci, PCI_LATENCY_TIMER,
-			latency);
+	/* Clear GPIO outputs */
+	tw_writel(TW68_GPOE, 0);
+	/* Remainder of setup according to board ID */
+	switch (dev->board) {
+	case TW68_BOARD_UNKNOWN:
+		printk(KERN_INFO "%s: Unable to determine board type, "
+				"using generic values\n", dev->name);
+		break;
 	}
 	return 0;
 }
 
-int
-tw68_get_resources (const struct tw68_core *core, struct pci_dev *pci)
+int tw68_tuner_setup(struct tw68_dev *dev)
 {
-	if (request_mem_region (pci_resource_start (pci, 0),
-			pci_resource_len (pci, 0), core->name))
-		return 0;
-	printk (KERN_ERR
-		"%s/%d: Can't get MMIO memory @ 0x%llx, subsystem: "
-		"%04x:%04x\n", core->name, PCI_FUNC (pci->devfn),
-		(unsigned long long) pci_resource_start (pci, 0),
-		pci->subsystem_vendor, pci->subsystem_device);
-	return -EBUSY;
+	return 0;
 }
 
-	/* Allocate and initialize the tw68 core struct.  One should
-	 * hold the devlist mutex before calling this.  */
-struct tw68_core *tw68_core_create (struct pci_dev *pci, int nr)
+/* stuff which needs working i2c */
+int tw68_board_init2(struct tw68_dev *dev)
 {
-	struct tw68_core *core;
-	int     i;
-
-	core = kzalloc (sizeof (*core), GFP_KERNEL);
-
-	atomic_inc (&core->refcount);
-	core->pci_bus = pci->bus->number;
-	core->pci_slot = PCI_SLOT (pci->devfn);
-	core->pci_irqmask = 0;	/*TODO - initial impl has no non-video */
-	mutex_init (&core->lock);
-
-	core->nr = nr;
-	sprintf (core->name, "tw68[%d]", core->nr);
-	if (0 != tw68_get_resources (core, pci)) {
-		kfree (core);
-		return NULL;
-	}
-
-	/* PCI stuff */
-	tw68_pci_quirks (core->name, pci);
-	core->lmmio = ioremap (pci_resource_start (pci, 0),
-		pci_resource_len (pci, 0));
-	core->bmmio = (u8 __iomem *) core->lmmio;
-
-	/* board config */
-	if (card[core->nr] < ARRAY_SIZE (tw68_boards))
-		core->boardnr = card[core->nr];
-	else
-		core->boardnr = UNSET;
-	for (i = 0;
-		UNSET == core->boardnr &&
-		i < ARRAY_SIZE (tw68_subids); i++) {
-		if (pci->subsystem_vendor == tw68_subids[i].subvendor
-			&& pci->subsystem_device ==
-			tw68_subids[i].subdevice) {
-			core->boardnr = tw68_subids[i].card;
-			break;
-		}
-	}
-	if (UNSET == core->boardnr) {
-		core->boardnr = TW68_BOARD_UNKNOWN;
-		tw68_card_list (core, pci);
-	}
-
-	memcpy (&core->board, &tw68_boards[core->boardnr],
-		sizeof (core->board));
-	info_printk (core,
-		"subsystem: %04x:%04x, board: %s [card=%d,%s], "
-		"frontend(s): %d\n",
-		pci->subsystem_vendor, pci->subsystem_device,
-		core->board.name, core->boardnr,
-		card[core->nr] ==
-		core->boardnr ? "insmod option" : "autodetected",
-		core->board.num_frontends);
-
-	/* init hardware */
-	tw68_reset (core);
-
-	return core;
+	return 0;
 }
+
+

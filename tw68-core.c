@@ -1,13 +1,15 @@
 /*
+ *  tw68-core.c
+ *  Core functions for the Techwell 68xx driver
  *
- * v4l2 device driver for Techwell 6800 based video capture cards
+ *  Much of this code is derived from the cx88 and sa7134 drivers, which
+ *  were in turn derived from the bt87x driver.  The original work was by
+ *  Gerd Knorr; more recently the code was enhanced by Mauro Carvalho Chehab,
+ *  Hans Verkuil, Andy Walls and many others.  Their work is gratefully
+ *  acknowledged.  Full credit goes to them - any problems within this code
+ *  are mine.
  *
- * (c) 2009 William M. Brack <wbrack@mmm.com.hk>
- *
- * The design and coding of this driver is heavily based upon the cx88
- * driver originally written by Gerd Knorr and modified by Mauro Carvalho
- * Chehab, whose work is gratefully acknowledged.  Full credit goes to
- * them - any problems are mine.
+ *  Copyright (C) 2009  William M. Brack <wbrack@mmm.com.hk>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,7 +23,8 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
+ *  02111-1307  USA
  */
 
 #include <linux/init.h>
@@ -32,406 +35,321 @@
 #include <linux/kmod.h>
 #include <linux/sound.h>
 #include <linux/interrupt.h>
-#include <linux/pci.h>
 #include <linux/delay.h>
-#include <linux/videodev2.h>
 #include <linux/mutex.h>
+#include <linux/dma-mapping.h>
+#include <linux/pm.h>
 
+#include <media/v4l2-dev.h>
 #include "tw68.h"
-#include <media/v4l2-common.h>
-#include <media/v4l2-ioctl.h>
+#include "tw68-reg.h"
 
 MODULE_DESCRIPTION("v4l2 driver module for tw6800 based video capture cards");
 MODULE_AUTHOR("William M. Brack <wbrack@mmm.com.hk>");
 MODULE_LICENSE("GPL");
 
-/* ------------------------------------------------------------------ */
+unsigned int irq_debug;
+module_param(irq_debug, int, 0644);
+MODULE_PARM_DESC(irq_debug, "enable debug messages [IRQ handler]");
 
 static unsigned int core_debug;
-module_param(core_debug,int,0644);
-MODULE_PARM_DESC(core_debug,"enable debug messages [core]");
+module_param(core_debug, int, 0644);
+MODULE_PARM_DESC(core_debug, "enable debug messages [core]");
 
-static unsigned int nicam;
-module_param(nicam,int,0644);
-MODULE_PARM_DESC(nicam,"tv audio is nicam");
+static unsigned int gpio_tracking;
+module_param(gpio_tracking, int, 0644);
+MODULE_PARM_DESC(gpio_tracking, "enable debug messages [gpio]");
+
+static unsigned int alsa = 1;
+module_param(alsa, int, 0644);
+MODULE_PARM_DESC(alsa, "enable/disable ALSA DMA sound [dmasound]");
+
+static unsigned int latency = UNSET;
+module_param(latency, int, 0444);
+MODULE_PARM_DESC(latency, "pci latency timer");
+
+int tw68_no_overlay = -1;
+module_param_named(no_overlay, tw68_no_overlay, int, 0444);
+MODULE_PARM_DESC(no_overlay, "allow override overlay default (0 disables, "
+		"1 enables) [some VIA/SIS chipsets are known to "
+		"have problem with overlay]");
 
 static unsigned int nocomb;
-module_param(nocomb,int,0644);
-MODULE_PARM_DESC(nocomb,"disable comb filter");
+module_param(nocomb, int, 0644);
+MODULE_PARM_DESC(nocomb, "disable comb filter");
 
-#define dprintk(level,fmt, arg...)	if (core_debug >= level)	\
-	printk(KERN_DEBUG "%s: " fmt, core->name , ## arg)
+static unsigned int video_nr[] = {[0 ... (TW68_MAXBOARDS - 1)] = UNSET };
+static unsigned int vbi_nr[]   = {[0 ... (TW68_MAXBOARDS - 1)] = UNSET };
+static unsigned int radio_nr[] = {[0 ... (TW68_MAXBOARDS - 1)] = UNSET };
+static unsigned int tuner[]    = {[0 ... (TW68_MAXBOARDS - 1)] = UNSET };
+static unsigned int card[]     = {[0 ... (TW68_MAXBOARDS - 1)] = UNSET };
 
-static unsigned int tw68_devcount;	/* curr tot num of devices present */
-static LIST_HEAD(tw68_devlist);
-static DEFINE_MUTEX(devlist);
+module_param_array(video_nr, int, NULL, 0444);
+module_param_array(vbi_nr,   int, NULL, 0444);
+module_param_array(radio_nr, int, NULL, 0444);
+module_param_array(tuner,    int, NULL, 0444);
+module_param_array(card,     int, NULL, 0444);
 
-#define NO_SYNC_LINE (-1U)
+MODULE_PARM_DESC(video_nr, "video device number");
+MODULE_PARM_DESC(vbi_nr,   "vbi device number");
+MODULE_PARM_DESC(radio_nr, "radio device number");
+MODULE_PARM_DESC(tuner,    "tuner type");
+MODULE_PARM_DESC(card,     "card type");
 
-/**
- *  @rp		pointer to current risc program position
- *  @sglist	pointer to "scatter-gather list" of buffer pointers
- *  @offset	offset to target memory buffer
- *  @sync_line	0 -> no sync, 1 -> odd sync, 2 -> even sync
- *  @bpl	number of bytes per scan line
- *  @padding	number of bytes of padding to add
- *  @lines	number of lines in field
- *  @lpi	lines per IRQ, or 0 to not generate irqs
- *		Note: IRQ to be generated _after_ lpi lines are transferred
- */
-static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
-			    unsigned int offset, u32 sync_line,
-			    unsigned int bpl, unsigned int padding,
-			    unsigned int lines, unsigned int lpi)
-{
-	struct scatterlist *sg;
-	unsigned int line,todo,done;
+LIST_HEAD(tw68_devlist);
+EXPORT_SYMBOL(tw68_devlist);
+DEFINE_MUTEX(tw68_devlist_lock);
+EXPORT_SYMBOL(tw68_devlist_lock);
+static LIST_HEAD(mops_list);
+static unsigned int tw68_devcount;      /* curr tot num of devices present */
 
-	/* sync instruction */
-	if (sync_line != NO_SYNC_LINE) {
-		if (sync_line == 1)
-			*(rp++) = cpu_to_le32(RISC_SYNCO);
-		else
-			*(rp++) = cpu_to_le32(RISC_SYNCE);
-		*(rp++) = 0;
-	}
-	/* scan lines */
-	sg = sglist;
-	for (line = 0; line < lines; line++) {
-		/* calculate next starting position */
-		while (offset && offset >= sg_dma_len(sg)) {
-			offset -= sg_dma_len(sg);
-			sg++;
-		}
-		if (bpl <= sg_dma_len(sg) - offset) {
-			/* fits into current chunk */
-			*(rp++) = cpu_to_le32(RISC_LINESTART |
-					      /* (offset<<12) |*/  bpl);
-			*(rp++) = cpu_to_le32(sg_dma_address(sg) + offset);
-			offset += bpl;
-		} else {
-			/*
-			 * scanline needs to be split.  Put the start in
-			 * whatever memory remains using RISC_LINESTART,
-			 * then the remainder into following addresses
-			 * given by the scatter-gather list.
-			 */
-			todo = bpl;	/* one full line to be done */
-			/* first fragment */
-			done = (sg_dma_len(sg) - offset);
-			*(rp++) = cpu_to_le32(RISC_LINESTART |
-						(7 << 24) |
-						done);
-			*(rp++) = cpu_to_le32(sg_dma_address(sg) + offset);
-			todo -= done;
-			sg++;
-			/* succeeding fragments have no offset */
-			while (todo > sg_dma_len(sg)) {
-				*(rp++) = cpu_to_le32(RISC_INLINE |
-						(done << 12) |
-						sg_dma_len(sg));
-				*(rp++) = cpu_to_le32(sg_dma_address(sg));
-				todo -= sg_dma_len(sg);
-				sg++;
-				done += sg_dma_len(sg);
-			}
-			/* final chunk - offset 0, count 'todo' */
-			*(rp++) = cpu_to_le32(RISC_INLINE |
-						(done << 12) |
-						todo);
-			*(rp++) = cpu_to_le32(sg_dma_address(sg));
-			offset = todo;
-		}
-		offset += padding;
-		/* If this line needs an interrupt, put it in */
-		if (lpi && line > 0 && !(line % lpi))
-			*(rp-2) |= RISC_INT_BIT;
-	}
+int (*tw68_dmasound_init)(struct tw68_dev *dev);
+EXPORT_SYMBOL(tw68_dmasound_init);
+int (*tw68_dmasound_exit)(struct tw68_dev *dev);
+EXPORT_SYMBOL(tw68_dmasound_exit);
 
-	return rp;
-}
+#define dprintk(level, fmt, arg...)      if (core_debug >= level) \
+	printk(KERN_DEBUG "%s: " fmt, dev->name , ## arg)
 
-/**
- * tw68_risc_buffer
- *
- * 	This routine is called by tw68-video.  It allocates
- * 	memory for the dma controller "program" and then fills in that
- * 	memory with the appropriate "instructions".
- *
- * 	@pci_dev	structure with info about the pci
- * 			slot which our device is in.
- * 	@risc		structure with info about the memory
- * 			used for our controller program.
- * 	@sglist		scatter-gather list entry
- * 	@top_offset	offset within the risc program area for the
- * 			first odd frame line
- * 	@bottom_offset	offset within the risc program area for the
- * 			first even frame line
- * 	@bpl		number of data bytes per scan line
- * 	@padding	number of extra bytes to add at end of line
- * 	@lines		number of scan lines
- */
-int tw68_risc_buffer(struct pci_dev *pci,
-			struct btcx_riscmem *risc,
-			struct scatterlist *sglist,
-			unsigned int top_offset,
-			unsigned int bottom_offset,
-			unsigned int bpl,
-			unsigned int padding,
-			unsigned int lines)
-{
-	u32 instructions, fields;
-	__le32 *rp;
-	int rc;
-
-	fields = 0;
-	if (UNSET != top_offset)
-		fields++;
-	if (UNSET != bottom_offset)
-		fields++;
-
-	/*
-	 * estimate risc mem: worst case is one write per page border +
-	 * one write per scan line + syncs + jump (all 2 dwords).
-	 * Padding can cause next bpl to start close to a page border.
-	 * First DMA region may be smaller than PAGE_SIZE
-	 */
-	instructions  = fields * (1 + (((bpl + padding) * lines) /
-			 PAGE_SIZE) + lines) + 2;
-	if ((rc = btcx_riscmem_alloc(pci,risc,instructions*8)) < 0)
-		return rc;
-
-	/* write risc instructions */
-	rp = risc->cpu;
-	if (UNSET != top_offset)	/* generates SYNCO */
-		rp = tw68_risc_field(rp, sglist, top_offset, 1,
-				     bpl, padding, lines, 0);
-	if (UNSET != bottom_offset)	/* generates SYNCE */
-		rp = tw68_risc_field(rp, sglist, bottom_offset, 2,
-				     bpl, padding, lines, 0);
-
-	/* save pointer to jmp instruction address */
-	risc->jmp = rp;
-	/* assure risc buffer hasn't overflowed */
-	BUG_ON((risc->jmp - risc->cpu + 2) * sizeof (*risc->cpu) > risc->size);
-	return 0;
-}
-
-#if 0
 /* ------------------------------------------------------------------ */
-/* debug helper code                                                  */
 
-static void tw68_risc_decode(u32 risc, u32 addr)
+void tw68_dma_free(struct videobuf_queue *q, struct tw68_buf *buf)
 {
-#define	RISC_OP(reg)	(((reg) >> 28) & 7)
-	static struct instr_details {
-		char *name;
-		u8 has_data_type;
-		u8 has_byte_info;
-		u8 has_addr;
-	} instr[8] = {
-		[ RISC_OP(RISC_SYNCO) ] = { "syncOdd", 0, 0, 0 },
-		[ RISC_OP(RISC_SYNCE) ] = { "syncEven", 0, 0, 0 },
-		[ RISC_OP(RISC_JUMP)  ] = { "jump", 0, 0, 1 },
-		[ RISC_OP(RISC_LINESTART) ] = { "lineStart", 1, 1, 1 },
-		[ RISC_OP(RISC_INLINE) ]    = { "inline", 1, 1, 1 },
-	};
-	u32 p;
-
-	p = RISC_OP(risc);
-	if (!(risc & 0x80000000) || !instr[p].name) {
-		printk("0x%08x [ INVALID ]\n", risc);
-		return;
-	}
-	printk("0x%08x %-9s IRQ=%d",
-		risc, instr[p].name, (risc >> 27) & 1);
-	if (instr[p].has_data_type) {
-		printk(" Type=%d", (risc >> 24) & 7);
-	}
-	if (instr[p].has_byte_info) {
-		printk(" Start=0x%03x Count=%03u",
-			(risc >> 12) & 0xfff, risc & 0xfff);
-	}
-	if (instr[p].has_addr) {
-		printk(" StartAddr=0x%08x", addr);
-	}
-	printk("\n");
-}
-
-void tw68_risc_program_dump(struct tw68_core *core,
-			    struct btcx_riscmem *risc)
-{
-	__le32 *addr;
-
-	printk(KERN_DEBUG "%s: risc_program_dump: risc=%p, "
-			  "risc->cpu=0x%p, risc->jmp=0x%p\n",
-			  core->name, risc, risc->cpu, risc->jmp);
-	for (addr = risc->cpu; addr <=risc->jmp; addr += 2) {
-		tw68_risc_decode(*addr, *(addr+1));
-	}
-}
-EXPORT_SYMBOL_GPL(tw68_risc_program_dump);
-#endif
-
-/*
- * tw68_risc_stopper
- * 	The 'risc_stopper' acts as a switch to direct the risc code
- * 	to the buffer at the head of the chain of active buffers.
- *
- * 	For the initial implementation, the "stopper" program is a
- * 	simple jump-to-self.
- */
-int tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc)
-{
-	__le32 *rp;
-	int rc;
-
-	if ((rc = btcx_riscmem_alloc(pci, risc, 4*4)) < 0)
-		return rc;
-
-	/* write risc inststructions */
-	rp = risc->cpu;
-	*(rp++) = cpu_to_le32(RISC_JUMP);
-	*(rp++) = cpu_to_le32(risc->dma);
-	risc->jmp = risc->cpu;
-	return 0;
-}
-EXPORT_SYMBOL_GPL(tw68_risc_stopper);
-
-/*
- * tw68_free_buffer
- *
- * 	Called by tw68-video.
- *
- */
-void
-tw68_free_buffer(struct videobuf_queue *q, struct tw68_buffer *buf)
-{
-	struct videobuf_dmabuf *dma=videobuf_to_dma(&buf->vb);
-
+	struct videobuf_dmabuf *dma = videobuf_to_dma(&buf->vb);
 	BUG_ON(in_interrupt());
-	videobuf_waiton(&buf->vb,0,0);
+
+	videobuf_waiton(&buf->vb, 0, 0);
 	videobuf_dma_unmap(q, dma);
 	videobuf_dma_free(dma);
+	/* if no risc area allocated, btcx_riscmem_free just returns */
 	btcx_riscmem_free(to_pci_dev(q->dev), &buf->risc);
 	buf->vb.state = VIDEOBUF_NEEDS_INIT;
 }
 
+/* ------------------------------------------------------------------ */
 /*
- * I just didn't understand what some of the original code was doing
- * here, so I commented out those parts.
+ * Buffer handling routines
+ *
+ * These routines are "generic", i.e. are intended to be used by more
+ * than one module, e.g. the video and the transport stream modules.
+ * To accomplish this generality, callbacks are used whenever some
+ * module-specific test or action is required.
  */
-void tw68_wakeup(struct tw68_core *core,
-		 struct tw68_dmaqueue *q, u32 count)
-{
-	struct tw68_buffer *buf;
-#if 0
-	int bc;
 
-	for (bc = 0;; bc++) {
-		if (list_empty(&q->active))
+/* resends a current buffer in queue after resume */
+int tw68_buffer_requeue(struct tw68_dev *dev,
+				  struct tw68_dmaqueue *q)
 {
-printk(KERN_DEBUG "%s: q->active empty\n", __func__);
-			break;
+	struct tw68_buf *buf, *prev;
+
+	dprintk(100, "%s: called\n", __func__);
+	if (!list_empty(&q->active)) {
+		buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
+		dprintk(10, "%s: [%p/%d] restart dma\n", __func__,
+			buf, buf->vb.i);
+		q->start_dma(dev, q, buf);
+		mod_timer(&q->timeout, jiffies + BUFFER_TIMEOUT);
+		return 0;
+	}
+
+	prev = NULL;
+	for (;;) {
+		if (list_empty(&q->queued))
+			return 0;
+		buf = list_entry(q->queued.next, struct tw68_buf, vb.queue);
+		/* if nothing precedes this one */
+		if (NULL == prev) {
+			list_move_tail(&buf->vb.queue, &q->active);
+			q->start_dma(dev, q, buf);
+			buf->activate(dev, buf, NULL);
+			mod_timer(&q->timeout, jiffies + BUFFER_TIMEOUT);
+			dprintk(10, "%s: [%p/%d] first active\n",
+				__func__, buf, buf->vb.i);
+
+		} else if (q->buf_compat(prev, buf)) {
+			list_move_tail(&buf->vb.queue, &q->active);
+			buf->activate(dev, buf, NULL);
+			prev->risc.jmp[1] = cpu_to_le32(buf->risc.dma);
+			dprintk(10, "%s: [%p/%d] move to active\n",
+				__func__, buf, buf->vb.i);
+		} else {
+			return 0;
+		}
+		prev = buf;
+	}
 }
-#endif
+
+/* nr of (tw68-)pages for the given buffer size */
+static int tw68_buffer_pages(int size)
+{
+	size  = PAGE_ALIGN(size);
+	size += PAGE_SIZE; /* for non-page-aligned buffers */
+	size /= 4096;
+	return size;
+}
+
+/* calc max # of buffers from size (must not exceed the 4MB virtual
+ * address space per DMA channel) */
+int tw68_buffer_count(unsigned int size, unsigned int count)
+{
+	unsigned int maxcount;
+
+	maxcount = 1024 / tw68_buffer_pages(size);
+	if (count > maxcount)
+		count = maxcount;
+	return count;
+}
+
+/*
+ * tw68_wakeup
+ *
+ * Called when the driver completes filling a buffer, and tasks waiting
+ * for the data need to be awakened.
+ */
+void tw68_wakeup(struct tw68_dmaqueue *q, unsigned int *fc)
+{
+	struct tw68_dev *dev = q->dev;
+	struct tw68_buf *buf;
+
 	if (list_empty(&q->active)) {
 		del_timer(&q->timeout);
 		return;
 	}
-	buf = list_entry(q->active.next, struct tw68_buffer, vb.queue);
-#if 0
-		/* count comes from the hw and is 16 bits wide --
-		 * this trick handles wrap-arounds correctly for
-		 * up to 32767 buffers in flight... */
-		if ((s16) (count - buf->count) < 0)
-{
-printk(KERN_DEBUG "%s: count is %d, buf->count is %d\n",
-  __func__, count, buf->count);
-			break;
-}
-#endif
+	buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
 	do_gettimeofday(&buf->vb.ts);
-	dprintk(2,"[%p/%d] wakeup reg=%d buf=%d\n",buf,buf->vb.i,
-		count, buf->count);
+	buf->vb.field_count = (*fc)++;
+	dprintk(1, "%s: [%p/%d] field_count=%d\n",
+		__func__, buf, buf->vb.i, *fc);
 	buf->vb.state = VIDEOBUF_DONE;
 	list_del(&buf->vb.queue);
 	wake_up(&buf->vb.done);
-#if 0
-	}
-	if (list_empty(&q->active)) {
-		del_timer(&q->timeout);
+	mod_timer(&q->timeout, jiffies + BUFFER_TIMEOUT);
+}
+
+/*
+ * tw68_buffer_queue
+ *
+ * Add specified buffer to specified queue
+ */
+void tw68_buffer_queue(struct tw68_dev *dev,
+			 struct tw68_dmaqueue *q,
+			 struct tw68_buf *buf)
+{
+	struct tw68_buf    *prev;
+
+	assert_spin_locked(&dev->slock);
+	dprintk(1, "%s: queuing buffer %p\n", __func__, buf);
+
+	/* append a 'JUMP to stopper' to the buffer risc program */
+	buf->risc.jmp[0] = cpu_to_le32(RISC_JUMP | RISC_INT_BIT);
+	buf->risc.jmp[1] = cpu_to_le32(q->stopper.dma);
+
+	/* if this buffer is not "compatible" (in dimensions and format)
+	 * with the currently active chain of buffers, we must change
+	 * settings before filling it; if a previous buffer has already
+	 * been determined to require changes, this buffer must follow
+	 * it.  To do this, we maintain a "queued" chain.  If that
+	 * chain exists, append this buffer to it */
+	if (!list_empty(&q->queued)) {
+		list_add_tail(&buf->vb.queue, &q->queued);
+		buf->vb.state = VIDEOBUF_QUEUED;
+		dprintk(10, "%s: [%p/%d] appended to queued\n",
+			__func__, buf, buf->vb.i);
+
+	/* else if the 'active' chain doesn't yet exist we create it now */
+	} else if (list_empty(&q->active)) {
+		dprintk(10, "%s: [%p/%d] first active\n",
+			__func__, buf, buf->vb.i);
+		list_add_tail(&buf->vb.queue, &q->active);
+		q->start_dma(dev, q, buf);	/* 1st one - start dma */
+		/* TODO - why have we removed buf->count and q->count? */
+		buf->activate(dev, buf, NULL);
+
+	/* else we would like to put this buffer on the tail of the
+	 * active chain, provided it is "compatible". */
 	} else {
-#endif
-	mod_timer(&q->timeout, jiffies+BUFFER_TIMEOUT);
-#if 0
+		prev = list_entry(q->active.prev, struct tw68_buf, vb.queue);
+		/* "compatibility" depends upon the type of buffer */
+		if (q->buf_compat(prev, buf)) {
+			/* If "compatible", append to active chain */
+			prev->risc.jmp[1] = cpu_to_le32(buf->risc.dma);
+			/* the param 'prev' is only for debug printing */
+			buf->activate(dev, buf, prev);
+			list_add_tail(&buf->vb.queue, &q->active);
+			dprintk(10, "%s: [%p/%d] appended to active\n",
+				__func__, buf, buf->vb.i);
+		} else {
+			/* If "incompatible", append to queued chain */
+			list_add_tail(&buf->vb.queue, &q->queued);
+			buf->vb.state = VIDEOBUF_QUEUED;
+			dprintk(10, "%s: [%p/%d] incompatible - appended "
+				"to queued\n", __func__, buf, buf->vb.i);
+		}
 	}
-	if (bc != 1)
-		dprintk(2, "%s: %d buffers handled (should be 1)\n",
-			__func__, bc);
-#endif
 }
 
-void tw68_shutdown(struct tw68_core *core)
+/*
+ * tw68_buffer_timeout
+ *
+ * Log the event, try to reset the h/w.
+ * Flag the current buffer as failed, try to start again with next buff
+ */
+void tw68_buffer_timeout(unsigned long data)
 {
-	/* disable RISC controller + interrupts */
-	tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-	core->pci_irqmask &= ~TW68_VID_INTS;
-	tw_writel(TW68_INTMASK, 0x0);
+	struct tw68_dmaqueue *q = (struct tw68_dmaqueue *)data;
+	struct tw68_dev *dev = q->dev;
+	struct tw68_buf *buf;
+	unsigned long flags;
+
+	dprintk(100, "%s called\n", __func__);
+	spin_lock_irqsave(&dev->slock, flags);
+
+	/* flag all current active buffers as failed */
+	while (!list_empty(&q->active)) {
+		buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
+		list_del(&buf->vb.queue);
+		buf->vb.state = VIDEOBUF_ERROR;
+		wake_up(&buf->vb.done);
+		printk(KERN_INFO "%s/0: [%p/%d] timeout - dma=0x%08lx\n",
+			dev->name, buf, buf->vb.i,
+			(unsigned long)buf->risc.dma);
+	}
+	tw68_buffer_requeue(dev, q);
+	spin_unlock_irqrestore(&dev->slock, flags);
 }
 
-int tw68_reset(struct tw68_core *core)
+/* ------------------------------------------------------------------ */
+/* early init (no i2c, no irq) */
+
+/* Called from tw68_hw_init1 and tw68_resume */
+static int tw68_hw_enable1(struct tw68_dev *dev)
 {
-	tw68_shutdown(core);
-	/* clear any pending interrupts */
+	return 0;
+}
+
+static int tw68_hw_init1(struct tw68_dev *dev)
+{
+	/* Assure all interrupts are disabled */
+	tw_writel(TW68_INTMASK, 0);
+	/* Clear any pending interrupts */
 	tw_writel(TW68_INTSTAT, 0xffffffff);
-	/* disable GPIO outputs */
-//	tw_writel(TW68_GPOE, 0);
-	tw_writeb(TW68_ACNTL, 0x80);	/* device reset */
-	/* wait a bit */
+	/* Stop risc processor, set default buffer level */
+	tw_writel(TW68_DMAC, 0x1600);
+	tw_writeb(TW68_ACNTL, 0x80);	/* soft reset */
 	msleep(100);
 
-	tw_writeb(TW68_INFORM, 0x40);
+	tw_writeb(TW68_INFORM, 0x40);	/* mux0, 27mhz xtal */
+/*	tw_writeb(TW68_OPFORM, 0x08);*/	/* analog line-lock */
 	tw_writeb(TW68_OPFORM, 0x04);
-	tw_writeb(TW68_HSYNC, 0);
-	tw_writeb(TW68_ACNTL, 0x42);
+	tw_writeb(TW68_HSYNC, 0);	/* color-killer high sens */
+	tw_writeb(TW68_ACNTL, 0x42);	/* int vref #2, chroma adc off */
 	tw_writeb(TW68_CNTRL1, 0xcc);
 
-	tw_writeb(TW68_CROP_HI, 0x02);
-	tw_writeb(TW68_VDELAY_LO, 0x18);
-	tw_writeb(TW68_VACTIVE_LO, 0xf0);
-	tw_writeb(TW68_HDELAY_LO, 0x0f);
-	tw_writeb(TW68_HACTIVE_LO, 0xd0);
-	tw_writeb(TW68_VSCALE_LO, 0);
-	tw_writeb(TW68_SCALE_HI, 0x11);
-	tw_writeb(TW68_HSCALE_LO, 0);
-
-	/*
-	 *  Following the bttv patches, we use the separate registers
-	 *  for the second field.  However, we initialize them exactly
-	 *  the same as the primary ones, since that's what's done
-	 *  when they are modified at run-time.
-	 */
-	tw_writeb(TW68_F2CNT, 0x01);
-	tw_writeb(TW68_F2CROP_HI, 0x02);
-	tw_writeb(TW68_F2VDELAY_LO, 0x18);
-	tw_writeb(TW68_F2VACTIVE_LO, 0xf0);
-	tw_writeb(TW68_F2HDELAY_LO, 0x0f);
-	tw_writeb(TW68_F2HACTIVE_LO, 0xd0);
-	tw_writeb(TW68_F2VSCALE_LO, 0);
-	tw_writeb(TW68_F2SCALE_HI, 0x11);
-	tw_writeb(TW68_F2HSCALE_LO, 0);
-
-	tw_writeb(TW68_BRIGHT, 0);
-	tw_writeb(TW68_CONTRAST, 0x5c);
-	tw_writeb(TW68_SHARPNESS, 0x98);
-	tw_writeb(TW68_SAT_U, 0x80);
-	tw_writeb(TW68_SAT_V, 0x80);
-	tw_writeb(TW68_HUE, 0);
+	/* TODO - Check that none of these are set by control defaults */
 	tw_writeb(TW68_SHARP2, 0xc6);
 	tw_writeb(TW68_VSHARP, 0x84);
 	tw_writeb(TW68_CORING, 0x44);
-	tw_writeb(TW68_CC_STATUS, 0x0a);
+	tw_writeb(TW68_CNTRL2, 0x0a);	/* Anti-alias filters enabled */
 	tw_writeb(TW68_SDT, 0x07);
 	tw_writeb(TW68_SDTR, 0x7f);
 	tw_writeb(TW68_RESERV2, 0x07);	/* FIXME - why? */
@@ -444,35 +362,132 @@ int tw68_reset(struct tw68_core *core)
 	tw_writeb(TW68_SYNCT, 0xb8);
 	tw_writeb(TW68_MISSCNT, 0x44);
 	tw_writeb(TW68_PCLAMP, 0x2a);
-	tw_writeb(TW68_VERTCTL, 0);
-	tw_writeb(TW68_VERTCTL2, 0);
-	tw_writeb(TW68_COLORKILL, 0x78);
+	tw_writeb(TW68_VCNTL1, 0);
+	tw_writeb(TW68_VCNTL2, 0);
+	tw_writeb(TW68_CKILL, 0x78);
 	tw_writeb(TW68_COMB, 0x44);
 	tw_writeb(TW68_LDLY, 0x30);
 	tw_writeb(TW68_MISC1, 0x14);
 	tw_writeb(TW68_LOOP, 0xa5);
 	tw_writeb(TW68_MISC2, 0xe0);
-	tw_writeb(TW68_MACROVISION, 0);
-	tw_writeb(TW68_CLMPCTL2, 0);
-	tw_writeb(TW68_FILLDATA, 0xa0);
+	tw_writeb(TW68_MVSN, 0);
 	tw_writeb(TW68_CLMD, 0x05);
 	tw_writeb(TW68_IDCNTL, 0);
 	tw_writeb(TW68_CLCNTL1, 0);
-	tw_writeb(TW68_SLICELEVEL, 0);
 	tw_writel(TW68_VBIC, 0x03);
 	tw_writel(TW68_CAP_CTL, 0x43);
 	tw_writel(TW68_DMAC, 0x2000);	/* patch set had 0x2080 */
 	tw_writel(TW68_TESTREG, 0);
 
+	/* Initialize the device control structures */
+	mutex_init(&dev->lock);
+	spin_lock_init(&dev->slock);
+
+	/* Initialize any subsystems */
+	tw68_video_init1(dev);
+	tw68_vbi_init1(dev);
+	if (card_has_mpeg(dev))
+		tw68_ts_init1(dev);
+	tw68_input_init1(dev);
+
+	/* Do any other h/w early initialisation at this point */
+	tw68_hw_enable1(dev);
+
 	return 0;
 }
 
-/* ------------------------------------------------------------------ */
+/* late init (with i2c + irq) */
+static int tw68_hw_enable2(struct tw68_dev *dev)
+{
+	return 0;
+}
 
-struct video_device *tw68_vdev_init(struct tw68_core *core,
-			struct pci_dev *pci,
-			struct video_device *template,
-			char *type)
+static int tw68_hw_init2(struct tw68_dev *dev)
+{
+	tw68_video_init2(dev);	/* initialise video function first */
+	tw68_tvaudio_init2(dev);/* audio next */
+
+	/* all other board-related things, incl. enabling interrupts */
+	tw68_hw_enable2(dev);
+	return 0;
+}
+
+/* shutdown */
+static int tw68_hwfini(struct tw68_dev *dev)
+{
+	if (card_has_mpeg(dev))
+		tw68_ts_fini(dev);
+	tw68_input_fini(dev);
+	tw68_vbi_fini(dev);
+	tw68_tvaudio_fini(dev);
+	return 0;
+}
+
+static void __devinit must_configure_manually(void)
+{
+	unsigned int i, p;
+
+	printk(KERN_WARNING
+	       "tw68: <rant>\n"
+	       "tw68:  Congratulations!  Your TV card vendor saved a few\n"
+	       "tw68:  cents for a eeprom, thus your pci board has no\n"
+	       "tw68:  subsystem ID and I can't identify it automatically\n"
+	       "tw68: </rant>\n"
+	       "tw68: I feel better now.  Ok, here are the good news:\n"
+	       "tw68: You can use the card=<nr> insmod option to specify\n"
+	       "tw68: which board do you have.  The list:\n");
+	for (i = 0; i < tw68_bcount; i++) {
+		printk(KERN_WARNING "tw68:   card=%d -> %-40.40s",
+		       i, tw68_boards[i].name);
+		for (p = 0; tw68_pci_tbl[p].driver_data; p++) {
+			if (tw68_pci_tbl[p].driver_data != i)
+				continue;
+			printk(" %04x:%04x",
+			       tw68_pci_tbl[p].subvendor,
+			       tw68_pci_tbl[p].subdevice);
+		}
+		printk("\n");
+	}
+}
+
+
+static irqreturn_t tw68_irq(int irq, void *dev_id)
+{
+	struct tw68_dev *dev = dev_id;
+	u32 status;
+	int loop;
+	int handled = 0;
+
+	status = tw_readl(TW68_INTSTAT);
+	/* Check if anything to do */
+	if (0 == status)
+		return IRQ_RETVAL(0);	/* Nope - return */
+	for (loop = 0; loop < 10; loop++) {
+		status = tw_readl(TW68_INTSTAT);
+		if (0 == (status & dev->pci_irqmask))
+			goto out;
+		handled = 1;
+		if (status & TW68_VID_INTS)	/* video interrupt */
+			tw68_irq_video_done(dev, status);
+	}
+	printk(KERN_WARNING "%s/0: irq loop - clearing mask\n",
+		dev->name);
+	tw_writel(TW68_INTMASK, 0);
+out:
+	if (0 == handled)
+		printk(KERN_DEBUG "%s: Interrupt not handled - "
+			"status=0x%08x\n", __func__, status);
+	return IRQ_RETVAL(1);
+}
+
+int tw68_set_dmabits(struct tw68_dev *dev)
+{
+	return 0;
+}
+
+static struct video_device *vdev_init(struct tw68_dev *dev,
+				      struct video_device *template,
+				      char *type)
 {
 	struct video_device *vfd;
 
@@ -481,68 +496,492 @@ struct video_device *tw68_vdev_init(struct tw68_core *core,
 		return NULL;
 	*vfd = *template;
 	vfd->minor   = -1;
-	vfd->parent  = &pci->dev;
+	vfd->parent  = &dev->pci->dev;
 	vfd->release = video_device_release;
+	vfd->debug   = video_debug;
 	snprintf(vfd->name, sizeof(vfd->name), "%s %s (%s)",
-		 core->name, type, core->board.name);
+		 dev->name, type, tw68_boards[dev->board].name);
 	return vfd;
 }
 
-struct tw68_core* tw68_core_get(struct pci_dev *pci)
+static void tw68_unregister_video(struct tw68_dev *dev)
 {
-	struct tw68_core *core;
-
-	mutex_lock(&devlist);
-	list_for_each_entry(core, &tw68_devlist, devlist) {
-		if (pci->bus->number != core->pci_bus)
-			continue;
-		if (PCI_SLOT(pci->devfn) != core->pci_slot)
-			continue;
-
-		if (0 != tw68_get_resources(core, pci)) {
-			mutex_unlock(&devlist);
-			return NULL;
-		}
-		atomic_inc(&core->refcount);
-		mutex_unlock(&devlist);
-		return core;
+	if (dev->video_dev) {
+		if (-1 != dev->video_dev->minor)
+			video_unregister_device(dev->video_dev);
+		else
+			video_device_release(dev->video_dev);
+		dev->video_dev = NULL;
 	}
-
-	core = tw68_core_create(pci, tw68_devcount);
-	if (NULL != core) {
-		tw68_devcount++;
-		list_add_tail(&core->devlist, &tw68_devlist);
+	if (dev->vbi_dev) {
+		if (-1 != dev->vbi_dev->minor)
+			video_unregister_device(dev->vbi_dev);
+		else
+			video_device_release(dev->vbi_dev);
+		dev->vbi_dev = NULL;
 	}
-
-	mutex_unlock(&devlist);
-	return core;
+	if (dev->radio_dev) {
+		if (-1 != dev->radio_dev->minor)
+			video_unregister_device(dev->radio_dev);
+		else
+			video_device_release(dev->radio_dev);
+		dev->radio_dev = NULL;
+	}
 }
 
-void tw68_core_put(struct tw68_core *core, struct pci_dev *pci)
+static void mpeg_ops_attach(struct tw68_mpeg_ops *ops,
+			    struct tw68_dev *dev)
 {
-	release_mem_region(pci_resource_start(pci,0),
-			   pci_resource_len(pci,0));
+	int err;
 
-	if (!atomic_dec_and_test(&core->refcount))
+	if (NULL != dev->mops)
 		return;
-
-	mutex_lock(&devlist);
-	list_del(&core->devlist);
-	iounmap(core->lmmio);
-	tw68_devcount--;
-	mutex_unlock(&devlist);
-	kfree(core);
+	if (tw68_boards[dev->board].mpeg != ops->type)
+		return;
+	err = ops->init(dev);
+	if (0 != err)
+		return;
+	dev->mops = ops;
 }
 
-/* ------------------------------------------------------------------ */
+static void mpeg_ops_detach(struct tw68_mpeg_ops *ops,
+			    struct tw68_dev *dev)
+{
+	if (NULL == dev->mops)
+		return;
+	if (dev->mops != ops)
+		return;
+	dev->mops->fini(dev);
+	dev->mops = NULL;
+}
 
-EXPORT_SYMBOL_GPL(tw68_wakeup);
-EXPORT_SYMBOL_GPL(tw68_reset);
-EXPORT_SYMBOL_GPL(tw68_shutdown);
+static int __devinit tw68_initdev(struct pci_dev *pci_dev,
+				     const struct pci_device_id *pci_id)
+{
+	struct tw68_dev *dev;
+	struct tw68_mpeg_ops *mops;
+	int err;
+	if (tw68_devcount == TW68_MAXBOARDS)
+		return -ENOMEM;
 
-EXPORT_SYMBOL_GPL(tw68_risc_buffer);
-EXPORT_SYMBOL_GPL(tw68_free_buffer);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	if (NULL == dev)
+		return -ENOMEM;
 
-EXPORT_SYMBOL_GPL(tw68_vdev_init);
-EXPORT_SYMBOL_GPL(tw68_core_get);
-EXPORT_SYMBOL_GPL(tw68_core_put);
+	err = v4l2_device_register(&pci_dev->dev, &dev->v4l2_dev);
+	if (err)
+		goto fail0;
+
+	/* pci init */
+	dev->pci = pci_dev;
+	if (pci_enable_device(pci_dev)) {
+		err = -EIO;
+		goto fail1;
+	}
+
+	dev->nr = tw68_devcount;
+	sprintf(dev->name, "tw%x[%d]", pci_dev->device, dev->nr);
+
+	/* pci quirks */
+	if (pci_pci_problems) {
+		if (pci_pci_problems & PCIPCI_TRITON)
+			printk(KERN_INFO "%s: quirk: PCIPCI_TRITON\n",
+				dev->name);
+		if (pci_pci_problems & PCIPCI_NATOMA)
+			printk(KERN_INFO "%s: quirk: PCIPCI_NATOMA\n",
+				dev->name);
+		if (pci_pci_problems & PCIPCI_VIAETBF)
+			printk(KERN_INFO "%s: quirk: PCIPCI_VIAETBF\n",
+				dev->name);
+		if (pci_pci_problems & PCIPCI_VSFX)
+			printk(KERN_INFO "%s: quirk: PCIPCI_VSFX\n",
+				dev->name);
+#ifdef PCIPCI_ALIMAGIK
+		if (pci_pci_problems & PCIPCI_ALIMAGIK) {
+			printk(KERN_INFO "%s: quirk: PCIPCI_ALIMAGIK "
+				"-- latency fixup\n", dev->name);
+			latency = 0x0A;
+		}
+#endif
+		if (pci_pci_problems & (PCIPCI_FAIL|PCIAGP_FAIL)) {
+			printk(KERN_INFO "%s: quirk: this driver and your "
+					"chipset may not work together"
+					" in overlay mode.\n", dev->name);
+			if (!tw68_no_overlay) {
+				printk(KERN_INFO "%s: quirk: overlay "
+						"mode will be disabled.\n",
+						dev->name);
+				tw68_no_overlay = 1;
+			} else {
+				printk(KERN_INFO "%s: quirk: overlay "
+						"mode will be forced. Use this"
+						" option at your own risk.\n",
+						dev->name);
+			}
+		}
+	}
+	if (UNSET != latency) {
+		printk(KERN_INFO "%s: setting pci latency timer to %d\n",
+		       dev->name, latency);
+		pci_write_config_byte(pci_dev, PCI_LATENCY_TIMER, latency);
+	}
+
+	/* print pci info */
+	pci_read_config_byte(pci_dev, PCI_CLASS_REVISION, &dev->pci_rev);
+	pci_read_config_byte(pci_dev, PCI_LATENCY_TIMER,  &dev->pci_lat);
+	printk(KERN_INFO "%s: found at %s, rev: %d, irq: %d, "
+	       "latency: %d, mmio: 0x%llx\n", dev->name,
+	       pci_name(pci_dev), dev->pci_rev, pci_dev->irq, dev->pci_lat,
+	       (unsigned long long)pci_resource_start(pci_dev, 0));
+	pci_set_master(pci_dev);
+	if (!pci_dma_supported(pci_dev, DMA_32BIT_MASK)) {
+		printk("%s: Oops: no 32bit PCI DMA ???\n", dev->name);
+		err = -EIO;
+		goto fail1;
+	}
+
+	/* board config */
+	dev->board = pci_id->driver_data;
+	if (card[dev->nr] >= 0 &&
+	    card[dev->nr] < tw68_bcount)
+		dev->board = card[dev->nr];
+	if (TW68_BOARD_NOAUTO == dev->board) {
+		must_configure_manually();
+		dev->board = TW68_BOARD_UNKNOWN;
+	}
+	dev->autodetected = card[dev->nr] != dev->board;
+	dev->tuner_type = tw68_boards[dev->board].tuner_type;
+	dev->tuner_addr = tw68_boards[dev->board].tuner_addr;
+	dev->radio_type = tw68_boards[dev->board].radio_type;
+	dev->radio_addr = tw68_boards[dev->board].radio_addr;
+	dev->tda9887_conf = tw68_boards[dev->board].tda9887_conf;
+	if (UNSET != tuner[dev->nr])
+		dev->tuner_type = tuner[dev->nr];
+	printk(KERN_INFO "%s: subsystem: %04x:%04x, board: %s [card=%d,%s]\n",
+		dev->name, pci_dev->subsystem_vendor,
+		pci_dev->subsystem_device, tw68_boards[dev->board].name,
+		dev->board, dev->autodetected ?
+		"autodetected" : "insmod option");
+
+	/* get mmio */
+	if (!request_mem_region(pci_resource_start(pci_dev, 0),
+				pci_resource_len(pci_dev, 0),
+				dev->name)) {
+		err = -EBUSY;
+		printk(KERN_ERR "%s: can't get MMIO memory @ 0x%llx\n",
+			dev->name,
+			(unsigned long long)pci_resource_start(pci_dev, 0));
+		goto fail1;
+	}
+	dev->lmmio = ioremap(pci_resource_start(pci_dev, 0),
+			     pci_resource_len(pci_dev, 0));
+	dev->bmmio = (__u8 __iomem *)dev->lmmio;
+	if (NULL == dev->lmmio) {
+		err = -EIO;
+		printk(KERN_ERR "%s: can't ioremap() MMIO memory\n",
+		       dev->name);
+		goto fail2;
+	}
+	/* initialize hardware #1 */
+	/* First, take care of anything unique to a particular card */
+	tw68_board_init1(dev);
+	/* Then do any initialisation wanted before interrupts are on */
+	tw68_hw_init1(dev);
+
+	/* get irq */
+	err = request_irq(pci_dev->irq, tw68_irq,
+			  IRQF_SHARED | IRQF_DISABLED, dev->name, dev);
+	if (err < 0) {
+		printk(KERN_ERR "%s: can't get IRQ %d\n",
+		       dev->name, pci_dev->irq);
+		goto fail3;
+	}
+
+#if 0
+	/* Register the i2c bus */
+	tw68_i2c_register(dev);
+#endif
+
+	/*
+	 *  Now do remainder of initialisation, first for
+	 *  things unique for this card, then for general board
+	 */
+	tw68_board_init2(dev);
+
+	tw68_hw_init2(dev);
+
+#if 0
+	/* load i2c helpers */
+	if (card_is_empress(dev)) {
+		struct v4l2_subdev *sd =
+			v4l2_i2c_new_subdev(&dev->i2c_adap, "saa6752hs",
+				"saa6752hs", 0x20);
+
+		if (sd)
+			sd->grp_id = GRP_EMPRESS;
+	}
+
+	request_submodules(dev);
+#endif
+
+	v4l2_prio_init(&dev->prio);
+
+	mutex_lock(&tw68_devlist_lock);
+	list_for_each_entry(mops, &mops_list, next)
+		mpeg_ops_attach(mops, dev);
+	list_add_tail(&dev->devlist, &tw68_devlist);
+	mutex_unlock(&tw68_devlist_lock);
+
+	/* check for signal */
+	tw68_irq_video_signalchange(dev);
+
+#if 0
+	if (TUNER_ABSENT != dev->tuner_type)
+		tw_call_all(dev, core, s_standby, 0);
+#endif
+
+	/* register v4l devices */
+	if (tw68_no_overlay > 0)
+		printk(KERN_INFO "%s: Overlay support disabled.\n",
+			dev->name);
+
+	dev->video_dev = vdev_init(dev, &tw68_video_template, "video");
+	err = video_register_device(dev->video_dev, VFL_TYPE_GRABBER,
+				    video_nr[dev->nr]);
+	if (err < 0) {
+		printk(KERN_INFO "%s: can't register video device\n",
+		       dev->name);
+		goto fail4;
+	}
+	printk(KERN_INFO "%s: registered device video%d [v4l2]\n",
+	       dev->name, dev->video_dev->num);
+
+	dev->vbi_dev = vdev_init(dev, &tw68_video_template, "vbi");
+
+	err = video_register_device(dev->vbi_dev, VFL_TYPE_VBI,
+				    vbi_nr[dev->nr]);
+	if (err < 0) {
+		printk(KERN_INFO "%s: can't register vbi device\n",
+			dev->name);
+		goto fail4;
+	}
+	printk(KERN_INFO "%s: registered device vbi%d\n",
+	       dev->name, dev->vbi_dev->num);
+
+	if (card_has_radio(dev)) {
+		dev->radio_dev = vdev_init(dev, &tw68_radio_template,
+					   "radio");
+		err = video_register_device(dev->radio_dev, VFL_TYPE_RADIO,
+					    radio_nr[dev->nr]);
+		if (err < 0) {
+			/* TODO - need to unregister vbi? */
+			printk(KERN_INFO "%s: can't register radio device\n",
+				dev->name);
+			goto fail4;
+		}
+		printk(KERN_INFO "%s: registered device radio%d\n",
+		       dev->name, dev->radio_dev->num);
+	}
+
+	/* everything worked */
+	tw68_devcount++;
+
+	if (tw68_dmasound_init && !dev->dmasound.priv_data)
+		tw68_dmasound_init(dev);
+
+	return 0;
+
+ fail4:
+	tw68_unregister_video(dev);
+#if 0
+	tw68_i2c_unregister(dev);
+#endif
+	free_irq(pci_dev->irq, dev);
+ fail3:
+	tw68_hwfini(dev);
+	iounmap(dev->lmmio);
+ fail2:
+	release_mem_region(pci_resource_start(pci_dev, 0),
+			   pci_resource_len(pci_dev, 0));
+ fail1:
+	v4l2_device_unregister(&dev->v4l2_dev);
+ fail0:
+	kfree(dev);
+	return err;
+}
+
+static void __devexit tw68_finidev(struct pci_dev *pci_dev)
+{
+	struct v4l2_device *v4l2_dev = pci_get_drvdata(pci_dev);
+	struct tw68_dev *dev =
+		container_of(v4l2_dev, struct tw68_dev, v4l2_dev);
+	struct tw68_mpeg_ops *mops;
+
+	/* Release DMA sound modules if present */
+printk("%s: finishing up\n", __func__);
+	if (tw68_dmasound_exit && dev->dmasound.priv_data)
+		tw68_dmasound_exit(dev);
+
+	/* shutdown subsystems */
+	tw68_hwfini(dev);
+	tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+	tw_writel(TW68_INTMASK, 0);
+
+	/* unregister */
+	mutex_lock(&tw68_devlist_lock);
+	list_del(&dev->devlist);
+	list_for_each_entry(mops, &mops_list, next)
+		mpeg_ops_detach(mops, dev);
+	mutex_unlock(&tw68_devlist_lock);
+	tw68_devcount--;
+
+#if 0
+	tw68_i2c_unregister(dev);
+#endif
+	tw68_unregister_video(dev);
+
+
+	/* the DMA sound modules should be unloaded before reaching
+	   this, but just in case they are still present... */
+	if (dev->dmasound.priv_data != NULL) {
+		free_irq(pci_dev->irq, &dev->dmasound);
+		dev->dmasound.priv_data = NULL;
+	}
+
+
+	/* release resources */
+	free_irq(pci_dev->irq, dev);
+	iounmap(dev->lmmio);
+	release_mem_region(pci_resource_start(pci_dev, 0),
+			   pci_resource_len(pci_dev, 0));
+
+	v4l2_device_unregister(&dev->v4l2_dev);
+
+	/* free memory */
+	kfree(dev);
+}
+
+#ifdef CONFIG_PM
+
+static int tw68_suspend(struct pci_dev *pci_dev , pm_message_t state)
+{
+	struct v4l2_device *v4l2_dev = pci_get_drvdata(pci_dev);
+	struct tw68_dev *dev = container_of(v4l2_dev,
+				struct tw68_dev, v4l2_dev);
+
+	/* disable overlay - apps should enable it explicitly on resume*/
+	dev->ovenable = 0;
+
+	tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+	dev->pci_irqmask &= ~TW68_VID_INTS;
+	tw_writel(TW68_INTMASK, 0);
+
+	dev->insuspend = 1;
+	synchronize_irq(pci_dev->irq);
+
+	/* Disable timeout timers - if we have active buffers, we will
+	   fill them on resume*/
+
+	del_timer(&dev->video_q.timeout);
+	del_timer(&dev->vbi_q.timeout);
+	del_timer(&dev->ts_q.timeout);
+
+	if (dev->remote)
+		tw68_ir_stop(dev);
+
+	pci_save_state(pci_dev);
+	pci_set_power_state(pci_dev, pci_choose_state(pci_dev, state));
+
+	return 0;
+}
+
+static int tw68_resume(struct pci_dev *pci_dev)
+{
+	struct v4l2_device *v4l2_dev = pci_get_drvdata(pci_dev);
+	struct tw68_dev *dev = container_of(v4l2_dev,
+					    struct tw68_dev, v4l2_dev);
+	unsigned long flags;
+
+	pci_set_power_state(pci_dev, PCI_D0);
+	pci_restore_state(pci_dev);
+
+	/* Do things that are done in tw68_initdev ,
+		except of initializing memory structures.*/
+
+	tw68_board_init1(dev);
+
+	/* tw68_hw_init1 */
+	if (tw68_boards[dev->board].video_out)
+		tw68_videoport_init(dev);
+	if (card_has_mpeg(dev))
+		tw68_ts_init_hw(dev);
+	if (dev->remote)
+		tw68_ir_start(dev, dev->remote);
+	tw68_hw_enable1(dev);
+
+	msleep(100);
+
+	tw68_board_init2(dev);
+
+	/*tw68_hw_init2*/
+	tw68_set_tvnorm_hw(dev);
+	tw68_tvaudio_setmute(dev);
+/*	tw68_tvaudio_setvolume(dev, dev->ctl_volume); */
+	tw68_tvaudio_init(dev);
+	tw68_irq_video_signalchange(dev);
+
+	/*resume unfinished buffer(s)*/
+	spin_lock_irqsave(&dev->slock, flags);
+	tw68_buffer_requeue(dev, &dev->video_q);
+	tw68_buffer_requeue(dev, &dev->vbi_q);
+	tw68_buffer_requeue(dev, &dev->ts_q);
+
+	/* FIXME: Disable DMA audio sound - temporary till proper support
+		  is implemented*/
+
+	dev->dmasound.dma_running = 0;
+
+	/* start DMA now*/
+	dev->insuspend = 0;
+	smp_wmb();
+	tw68_set_dmabits(dev);
+	spin_unlock_irqrestore(&dev->slock, flags);
+
+	return 0;
+}
+#endif
+
+/* ----------------------------------------------------------- */
+
+static struct pci_driver tw68_pci_driver = {
+	.name	  = "tw68",
+	.id_table = tw68_pci_tbl,
+	.probe	  = tw68_initdev,
+	.remove	  = __devexit_p(tw68_finidev),
+#ifdef CONFIG_PM
+	.suspend  = tw68_suspend,
+	.resume   = tw68_resume
+#endif
+};
+
+static int tw68_init(void)
+{
+	INIT_LIST_HEAD(&tw68_devlist);
+	printk(KERN_INFO "tw68: v4l2 driver version %d.%d.%d loaded\n",
+		(TW68_VERSION_CODE >> 16) & 0xff,
+		(TW68_VERSION_CODE >> 8) & 0xff,
+		TW68_VERSION_CODE & 0xff);
+#if 0
+	printk(KERN_INFO "tw68: snapshot date %04d-%02d-%02d\n",
+		SNAPSHOT/10000, (SNAPSHOT/100)%100, SNAPSHOT%100);
+#endif
+	return pci_register_driver(&tw68_pci_driver);
+}
+
+static void module_cleanup(void)
+{
+	pci_unregister_driver(&tw68_pci_driver);
+}
+
+module_init(tw68_init);
+module_exit(module_cleanup);
