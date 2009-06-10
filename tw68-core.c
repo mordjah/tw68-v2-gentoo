@@ -329,55 +329,66 @@ static int tw68_hw_enable1(struct tw68_dev *dev)
 
 static int tw68_hw_init1(struct tw68_dev *dev)
 {
-	/* Assure all interrupts are disabled */
-	tw_writel(TW68_INTMASK, 0);
-	/* Clear any pending interrupts */
-	tw_writel(TW68_INTSTAT, 0xffffffff);
-	/* Stop risc processor, set default buffer level */
+	/* clear any pending interrupts */
+	tw_writel(TW68_INTSTAT, 0xffffffff);  // 01C
+
+	/* disable GPIO outputs */
+	//tw_writel(TW68_GPOE, 0);        // 028
+
+	/* stop risc processor, set default buffer level */
 	tw_writel(TW68_DMAC, 0x1600);
-	tw_writeb(TW68_ACNTL, 0x80);	/* soft reset */
+	/* device reset */
+	tw_writeb(TW68_ACNTL, 0x80);      // 218
+	/* wait a bit */
 	msleep(100);
 
-	tw_writeb(TW68_INFORM, 0x40);	/* mux0, 27mhz xtal */
-/*	tw_writeb(TW68_OPFORM, 0x08);*/	/* analog line-lock */
-	tw_writeb(TW68_OPFORM, 0x04);
-	tw_writeb(TW68_HSYNC, 0);	/* color-killer high sens */
-	tw_writeb(TW68_ACNTL, 0x42);	/* int vref #2, chroma adc off */
-	tw_writeb(TW68_CNTRL1, 0xcc);
+	// mux0, 27mhz xtal
+	tw_writeb(TW68_INFORM, 0x40);     // 208
+	// analog line-lock
+	tw_writeb(TW68_OPFORM, 0x04);     // 20C
+	// color-killer high sens
+	tw_writeb(TW68_HSYNC, 0);         // 210
+	// int vref #2, chroma adc off
+	tw_writeb(TW68_ACNTL, 0x42);      // 218
+	tw_writeb(TW68_CNTRL1, 0xcc);     // 230
 
-	/* TODO - Check that none of these are set by control defaults */
-	tw_writeb(TW68_SHARP2, 0xc6);
-	tw_writeb(TW68_VSHARP, 0x84);
-	tw_writeb(TW68_CORING, 0x44);
-	tw_writeb(TW68_CNTRL2, 0x0a);	/* Anti-alias filters enabled */
-	tw_writeb(TW68_SDT, 0x07);
-	tw_writeb(TW68_SDTR, 0x7f);
-	tw_writeb(TW68_RESERV2, 0x07);	/* FIXME - why? */
-	tw_writeb(TW68_RESERV3, 0x7f);	/* FIXME - why? */
-	tw_writeb(TW68_CLMPG, 0x50);
-	tw_writeb(TW68_IAGC, 0x42);
-	tw_writeb(TW68_AGCGAIN, 0xf0);
-	tw_writeb(TW68_PEAKWT, 0xd8);
-	tw_writeb(TW68_CLMPL, 0xbc);
-	tw_writeb(TW68_SYNCT, 0xb8);
-	tw_writeb(TW68_MISSCNT, 0x44);
-	tw_writeb(TW68_PCLAMP, 0x2a);
-	tw_writeb(TW68_VCNTL1, 0);
-	tw_writeb(TW68_VCNTL2, 0);
-	tw_writeb(TW68_CKILL, 0x78);
-	tw_writeb(TW68_COMB, 0x44);
-	tw_writeb(TW68_LDLY, 0x30);
-	tw_writeb(TW68_MISC1, 0x14);
-	tw_writeb(TW68_LOOP, 0xa5);
-	tw_writeb(TW68_MISC2, 0xe0);
-	tw_writeb(TW68_MVSN, 0);
-	tw_writeb(TW68_CLMD, 0x05);
-	tw_writeb(TW68_IDCNTL, 0);
-	tw_writeb(TW68_CLCNTL1, 0);
-	tw_writel(TW68_VBIC, 0x03);
-	tw_writel(TW68_CAP_CTL, 0x43);
-	tw_writel(TW68_DMAC, 0x2000);	/* patch set had 0x2080 */
-	tw_writel(TW68_TESTREG, 0);
+	// TODO - Check that none of these are set by control defaults
+	tw_writeb(TW68_SHARP2, 0xc6);     // 258  cavok - my specs say 0x53
+	tw_writeb(TW68_VSHARP, 0x84);     // 25C  cavok - my specs say 0x80
+	tw_writeb(TW68_CORING, 0x44);     // 260
+	// Anti-alias filters enabled
+	tw_writeb(TW68_CNTRL2, 0x0a);     // 268  cavok - my specs say 0x00
+
+	tw_writeb(TW68_SDT, 0x07);        // 270
+	tw_writeb(TW68_SDTR, 0x7f);       // 274
+	tw_writeb(TW68_RESERV2, 0x07);    // 278  /* FIXME - why? */
+	tw_writeb(TW68_RESERV3, 0x7f);    // 27C  /* FIXME - why? */
+	tw_writeb(TW68_CLMPG, 0x50);      // 280
+	tw_writeb(TW68_IAGC, 0x42);       // 284  cavok - my specs say 0x22
+	tw_writeb(TW68_AGCGAIN, 0xf0);    // 288
+	tw_writeb(TW68_PEAKWT, 0xd8);     // 28C
+	tw_writeb(TW68_CLMPL, 0xbc);      // 290  cavok - my specs say 0x3C
+	tw_writeb(TW68_SYNCT, 0xb8);      // 294  cavok - my specs say 0x38
+	tw_writeb(TW68_MISSCNT, 0x44);    // 298
+	tw_writeb(TW68_PCLAMP, 0x2a);     // 29C  cavok - my specs say 0x28
+	tw_writeb(TW68_VCNTL1, 0);        // 2A0
+	tw_writeb(TW68_VCNTL2, 0);        // 2A4
+	tw_writeb(TW68_CKILL, 0x78);      // 2A8  cavok - my specs say 0x68
+	tw_writeb(TW68_COMB, 0x44);       // 2AC
+	tw_writeb(TW68_LDLY, 0x30);       // 2B0
+	tw_writeb(TW68_MISC1, 0x14);      // 2B4
+	tw_writeb(TW68_LOOP, 0xa5);       // 2B8
+	tw_writeb(TW68_MISC2, 0xe0);      // 2BC
+	tw_writeb(TW68_MVSN, 0);          // 2C0
+	tw_writeb(TW68_STATUS2, 0);       // 2C4
+	tw_writeb(TW68_HFREF, 0xa0);      // 2C8  cavok - my specs say this reg is R/O
+	tw_writeb(TW68_CLMD, 0x05);       // 2CC  cavok - my specs say 0x11
+	tw_writeb(TW68_IDCNTL, 0);        // 2D0  cavok - my specs say a completely different way to use this reg
+	tw_writeb(TW68_CLCNTL1, 0);       // 2D4
+	tw_writel(TW68_VBIC, 0x03);       // 010
+	tw_writel(TW68_CAP_CTL, 0x43);    // 040  cavok - my specs say 0x03
+	tw_writel(TW68_DMAC, 0x2000);     // 000  /* patch set had 0x2080 */  cavok - my specs say 0x1600
+	tw_writel(TW68_TESTREG, 0);       // 02C
 
 	/* Initialize the device control structures */
 	mutex_init(&dev->lock);
