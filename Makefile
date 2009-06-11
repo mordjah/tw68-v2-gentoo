@@ -19,9 +19,14 @@ clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 	rm -rf modules.order videotest
 
-run: all
+insmod: all
 	-sudo rmmod tw68
-	sudo insmod tw68.ko
+	sudo insmod tw68.ko core_debug=10 video_debug=10
+
+run: insmod
+	test -x /usr/bin/v4l2ucp && v4l2ucp &
+	test -x /usr/bin/mplayer && mplayer tv:// -tv device=/dev/video0:outfmt=yuy2:normid=3:width=640:height=480
+	killall v4l2ucp
 
 cscope:
 	find -type f -name "*.[hc]" | cscope -b -i -
