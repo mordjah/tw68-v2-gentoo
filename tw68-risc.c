@@ -98,11 +98,13 @@ static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
 				sg++;
 				done += sg_dma_len(sg);
 			}
-			/* final chunk - offset 0, count 'todo' */
-			*(rp++) = cpu_to_le32(RISC_INLINE |
-						(done << 12) |
-						todo);
-			*(rp++) = cpu_to_le32(sg_dma_address(sg));
+			if (todo) {
+				/* final chunk - offset 0, count 'todo' */
+				*(rp++) = cpu_to_le32(RISC_INLINE |
+							(done << 12) |
+							todo);
+				*(rp++) = cpu_to_le32(sg_dma_address(sg));
+			}
 			offset = todo;
 		}
 		offset += padding;

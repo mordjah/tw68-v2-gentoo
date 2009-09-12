@@ -24,12 +24,28 @@
  *  along with this program; if not, write to the Free Software
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
  *  02111-1307  USA
+ *
+ *  Latest revision:	12 Sep 2009
+ *
+ *  	Enhanced the video standards selection and setting.
+ *
+ *  	Beginning work on implementing Overlay Mode.  This includes
+ *  	enhancement of the cropping and scaling capabilities of the
+ *  	driver.  Note that this most of the new code is not usable
+ *  	at the moment.
  */
 
-
+/**
+ * TODO:
+ *
+ * 	reqbufs should check for a count of zero, and if so should
+ * 	follow the chain of queued buffers and call videobuf_mmap_free
+ * 	for each of them.
+ */
 #include "tw68.h"
 #include "tw68-reg.h"
 #include <media/v4l2-common.h>
+#include <linux/sort.h>
 
 unsigned int video_debug;
 
@@ -56,7 +72,11 @@ MODULE_PARM_DESC(secam, "force SECAM variant, either DK,L or Lc");
 
 /* ------------------------------------------------------------------ */
 /* data structs for video                                             */
-
+/*
+ * Note that the saa7134 has formats, e.g. YUV420, which are classified
+ * as "planar".  These affect overlay mode, and are flagged with a field
+ * ".planar" in the format.  Do we need to implement this in this driver?
+ */
 static struct tw68_format formats[] = {
 	{
 		.name		= "15 bpp RGB, le",
@@ -118,8 +138,8 @@ static struct tw68_format formats[] = {
 		.h_start	= 0,	\
 		.h_stop		= 719,	\
 		.v_delay	= 18,	\
-		.video_v_start	= 0,	\
-		.video_v_stop	= 287,	\
+		.video_v_start	= 24,	\
+		.video_v_stop	= 311,	\
 		.vbi_v_start_0	= 7,	\
 		.vbi_v_stop_0	= 22,	\
 		.vbi_v_start_1	= 319,	\
@@ -137,21 +157,13 @@ static struct tw68_format formats[] = {
 		.vbi_v_start_1	= 273,	\
 		.src_timing	= 7
 
+/*
+ * The following table is searched by tw68_s_std, first for a specific
+ * match, then for an entry which contains the desired id.  The table
+ * entries should therefore be ordered in ascending order of specificity.
+ */
 static struct tw68_tvnorm tvnorms[]		= {
 	{
-		.name		= "PAL", /* autodetect */
-		.id		= V4L2_STD_PAL,
-		NORM_625_50,
-
-		.sync_control	= 0x18,
-		.luma_control	= 0x40,
-		.chroma_ctrl1	= 0x81,
-		.chroma_gain	= 0x2a,
-		.chroma_ctrl2	= 0x06,
-		.vgate_misc	= 0x1c,
-		.format		= VideoFormatPALBDGHI,
-
-	}, {
 		.name		= "PAL-BG",
 		.id		= V4L2_STD_PAL_BG,
 		NORM_625_50,
@@ -191,6 +203,19 @@ static struct tw68_tvnorm tvnorms[]		= {
 		.format		= VideoFormatPALBDGHI,
 
 	}, {
+		.name		= "PAL", /* autodetect */
+		.id		= V4L2_STD_PAL,
+		NORM_625_50,
+
+		.sync_control	= 0x18,
+		.luma_control	= 0x40,
+		.chroma_ctrl1	= 0x81,
+		.chroma_gain	= 0x2a,
+		.chroma_ctrl2	= 0x06,
+		.vgate_misc	= 0x1c,
+		.format		= VideoFormatPALBDGHI,
+
+	}, {
 		.name		= "NTSC",
 		.id		= V4L2_STD_NTSC,
 		NORM_525_60,
@@ -202,19 +227,6 @@ static struct tw68_tvnorm tvnorms[]		= {
 		.chroma_ctrl2	= 0x0e,
 		.vgate_misc	= 0x18,
 		.format		= VideoFormatNTSC,
-
-	}, {
-		.name		= "SECAM",
-		.id		= V4L2_STD_SECAM,
-		NORM_625_50,
-
-		.sync_control	= 0x18,
-		.luma_control	= 0x1b,
-		.chroma_ctrl1	= 0xd1,
-		.chroma_gain	= 0x80,
-		.chroma_ctrl2	= 0x00,
-		.vgate_misc	= 0x1c,
-		.format		= VideoFormatSECAM,
 
 	}, {
 		.name		= "SECAM-DK",
@@ -243,8 +255,21 @@ static struct tw68_tvnorm tvnorms[]		= {
 		.format		= VideoFormatSECAM,
 
 	}, {
-		.name		= "SECAM-Lc",
+		.name		= "SECAM-LC",
 		.id		= V4L2_STD_SECAM_LC,
+		NORM_625_50,
+
+		.sync_control	= 0x18,
+		.luma_control	= 0x1b,
+		.chroma_ctrl1	= 0xd1,
+		.chroma_gain	= 0x80,
+		.chroma_ctrl2	= 0x00,
+		.vgate_misc	= 0x1c,
+		.format		= VideoFormatSECAM,
+
+	}, {
+		.name		= "SECAM",
+		.id		= V4L2_STD_SECAM,
 		NORM_625_50,
 
 		.sync_control	= 0x18,
@@ -302,6 +327,36 @@ static struct tw68_tvnorm tvnorms[]		= {
 		.chroma_ctrl2	= 0x06,
 		.vgate_misc	= 0x1c,
 		.format		= VideoFormatPAL60,
+
+	}, {
+/*
+ * 	FIXME:  The following are meant to be "catch-all", and need
+ *		to be further thought out!
+ */
+		.name		= "STD-525-60",
+		.id		= V4L2_STD_525_60,
+		NORM_525_60,
+
+		.sync_control	= 0x59,
+		.luma_control	= 0x40,
+		.chroma_ctrl1	= 0x89,
+		.chroma_gain	= 0x2a,
+		.chroma_ctrl2	= 0x0e,
+		.vgate_misc	= 0x18,
+		.format		= VideoFormatNTSC,
+
+	}, {
+		.name		= "STD-625-50",
+		.id		= V4L2_STD_625_50,
+		NORM_625_50,
+
+		.sync_control	= 0x18,
+		.luma_control	= 0x40,
+		.chroma_ctrl1	= 0x81,
+		.chroma_gain	= 0x2a,
+		.chroma_ctrl2	= 0x06,
+		.vgate_misc	= 0x1c,
+		.format		= VideoFormatPALBDGHI,
 	}
 };
 #define TVNORMS ARRAY_SIZE(tvnorms)
@@ -344,6 +399,7 @@ static const struct v4l2_queryctrl video_ctrls[]		= {
 		.step		= 1,
 		.default_value	= 0,
 		.type		= V4L2_CTRL_TYPE_INTEGER,
+#if 0
 	},
 	/* --- audio --- */
 	{
@@ -352,7 +408,6 @@ static const struct v4l2_queryctrl video_ctrls[]		= {
 		.minimum	= 0,
 		.maximum	= 1,
 		.type		= V4L2_CTRL_TYPE_BOOLEAN,
-#if 0
 	}, {
 		.id		= V4L2_CID_AUDIO_VOLUME,
 		.name		= "Volume",
@@ -466,11 +521,6 @@ static void res_free(struct tw68_dev *dev, struct tw68_fh *fh,
 
 /* ------------------------------------------------------------------ */
 
-/*
- * TODO		At this point I don't understand the clipping, cropping
- *		and preview capabilities for the tw68, so much of the
- *		following is just commented out.
- */
 static void set_tvnorm(struct tw68_dev *dev, struct tw68_tvnorm *norm)
 {
 	dprintk(1, "%s: %s\n", __func__, norm->name);
@@ -554,14 +604,12 @@ int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 		   dev->tvnorm->video_v_start + 1) * 2;
 	vscale = (vactive * 256) / height;
 
-	printk("%s: %dx%d [%s%s,%s]\n", __func__,
-//	dprintk(2, "%s: %dx%d [%s%s,%s]\n", __func__,
+	dprintk(2, "%s: %dx%d [%s%s,%s]\n", __func__,
 		width, height,
 		V4L2_FIELD_HAS_TOP(field)    ? "T" : "",
 		V4L2_FIELD_HAS_BOTTOM(field) ? "B" : "",
 		v4l2_norm_to_name(dev->tvnorm->id));
-	printk("%s: hactive=%d, hdelay=%d, hscale=%d; "
-//	dprintk(2, "%s: hactive=%d, hdelay=%d, hscale=%d; "
+	dprintk(2, "%s: hactive=%d, hdelay=%d, hscale=%d; "
 		   "vactive=%d, vdelay=%d, vscale=%d\n", __func__,
 		   hactive, hdelay, hscale, vactive, vdelay, vscale);
 
@@ -569,8 +617,8 @@ int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 		((vactive & 0x300) >> 4) |
 		((hdelay & 0x300)  >> 6) |
 		((hactive & 0x300) >> 8);
-printk("%s: setting CROP_HI=%02x, VDELAY_LO=%02x, VACTIVE_LO=%02x, "
-	"HDELAY_LO=%02x, HACTIVE_LO=%02x\n", __func__, comb, vdelay,
+	dprintk(2, "%s: setting CROP_HI=%02x, VDELAY_LO=%02x, VACTIVE_LO=%02x, "
+		"HDELAY_LO=%02x, HACTIVE_LO=%02x\n", __func__, comb, vdelay,
 	vactive, hdelay, hactive);
 	tw_writeb(TW68_CROP_HI, comb);
 	tw_writeb(TW68_VDELAY_LO, vdelay & 0xff);
@@ -579,195 +627,13 @@ printk("%s: setting CROP_HI=%02x, VDELAY_LO=%02x, VACTIVE_LO=%02x, "
 	tw_writeb(TW68_HACTIVE_LO, hactive & 0xff);
 
 	comb = ((vscale & 0xf00) >> 4) | ((hscale & 0xf00) >> 8);
-printk("%s: setting SCALE_HI=%02x, VSCALE_LO=%02x, HSCALE_LO=%02x\n",
-	__func__, comb, vscale, hscale);
+	dprintk(2, "%s: setting SCALE_HI=%02x, VSCALE_LO=%02x, "
+		"HSCALE_LO=%02x\n", __func__, comb, vscale, hscale);
 	tw_writeb(TW68_SCALE_HI, comb);
 	tw_writeb(TW68_VSCALE_LO, vscale);
 	tw_writeb(TW68_HSCALE_LO, hscale);
 
-#if 0
-	/* todo -  setup filters */
-	value = (1 << 19);        /* CFILT (default) */
-	if (dev->tvnorm & V4L2_STD_SECAM) {
-		value |= (1 << 15);
-		value |= (1 << 16);
-	}
-	if (INPUT(core->input).type == TW68_VMUX_SVIDEO)
-		value |= (1 << 13) | (1 << 5);
-	if (V4L2_FIELD_INTERLACED == field)
-		value |= (1 << 3); /* VINT (interlaced vertical scaling) */
-	if (width < 385)
-		value |= (1 << 0); /* 3-tap interpolation */
-	if (width < 193)
-		value |= (1 << 1); /* 5-tap interpolation */
-	if (nocomb)
-		value |= (3 << 5); /* disable comb filter */
-
-	printk(KERN_DEBUG "set_scale: filter  0x%04x\n", value);
-#endif
 	return 0;
-}
-#if 0
-static void tw68_set_decoder(struct tw68_dev *dev)
-{
-	int luma_control, sync_control, mux;
-
-	struct tw68_tvnorm *norm = dev->tvnorm;
-	mux = card_in(dev, dev->ctl_input).vmux;
-
-	luma_control = norm->luma_control;
-	sync_control = norm->sync_control;
-
-	if (mux > 5)
-		luma_control |= 0x80; /* svideo */
-	if (noninterlaced || dev->nosignal)
-		sync_control |= 0x20;
-
-	/* setup video decoder */
-	twwriteb(TW68_INCR_DELAY,            0x08);
-	twwriteb(TW68_ANALOG_IN_CTRL1,       0xc0 | mux);
-	twwriteb(TW68_ANALOG_IN_CTRL2,       0x00);
-
-	twwriteb(TW68_ANALOG_IN_CTRL3,       0x90);
-	twwriteb(TW68_ANALOG_IN_CTRL4,       0x90);
-	twwriteb(TW68_HSYNC_START,           0xeb);
-	twwriteb(TW68_HSYNC_STOP,            0xe0);
-	twwriteb(TW68_SOURCE_TIMING1,        norm->src_timing);
-
-	twwriteb(TW68_SYNC_CTRL,             sync_control);
-	twwriteb(TW68_LUMA_CTRL,             luma_control);
-	twwriteb(TW68_DEC_LUMA_BRIGHT,       dev->ctl_bright);
-
-	twwriteb(TW68_DEC_LUMA_CONTRAST,
-		dev->ctl_invert ? -dev->ctl_contrast : dev->ctl_contrast);
-
-	twwriteb(TW68_DEC_CHROMA_SATURATION,
-		dev->ctl_invert ? -dev->ctl_saturation : dev->ctl_saturation);
-
-	twwriteb(TW68_DEC_CHROMA_HUE,        dev->ctl_hue);
-	twwriteb(TW68_CHROMA_CTRL1,          norm->chroma_ctrl1);
-	twwriteb(TW68_CHROMA_GAIN,           norm->chroma_gain);
-
-	twwriteb(TW68_CHROMA_CTRL2,          norm->chroma_ctrl2);
-	twwriteb(TW68_MODE_DELAY_CTRL,       0x00);
-
-	twwriteb(TW68_ANALOG_ADC,            0x01);
-	twwriteb(TW68_VGATE_START,           0x11);
-	twwriteb(TW68_VGATE_STOP,            0xfe);
-	twwriteb(TW68_MISC_VGATE_MSB,        norm->vgate_misc);
-	twwriteb(TW68_RAW_DATA_GAIN,         0x40);
-	twwriteb(TW68_RAW_DATA_OFFSET,       0x80);
-}
-
-static void set_h_prescale(struct tw68_dev *dev, int task, int prescale)
-{
-	static const struct {
-		int xpsc;
-		int xacl;
-		int xc2_1;
-		int xdcg;
-		int vpfy;
-	} vals[] = {
-		/* XPSC XACL XC2_1 XDCG VPFY */
-		{    1,   0,    0,    0,   0 },
-		{    2,   2,    1,    2,   2 },
-		{    3,   4,    1,    3,   2 },
-		{    4,   8,    1,    4,   2 },
-		{    5,   8,    1,    4,   2 },
-		{    6,   8,    1,    4,   3 },
-		{    7,   8,    1,    4,   3 },
-		{    8,  15,    0,    4,   3 },
-		{    9,  15,    0,    4,   3 },
-		{   10,  16,    1,    5,   3 },
-	};
-	static const int count = ARRAY_SIZE(vals);
-	int i;
-
-	for (i = 0; i < count; i++)
-		if (vals[i].xpsc == prescale)
-			break;
-	if (i == count)
-		return;
-
-	twwriteb(TW68_H_PRESCALE(task), vals[i].xpsc);
-	twwriteb(TW68_ACC_LENGTH(task), vals[i].xacl);
-	twwriteb(TW68_LEVEL_CTRL(task),
-		   (vals[i].xc2_1 << 3) | (vals[i].xdcg));
-	twandorb(TW68_FIR_PREFILTER_CTRL(task), 0x0f,
-		   (vals[i].vpfy << 2) | vals[i].vpfy);
-}
-
-static void set_v_scale(struct tw68_dev *dev, int task, int yscale)
-{
-	int val, mirror;
-
-	twwriteb(TW68_V_SCALE_RATIO1(task), yscale &  0xff);
-	twwriteb(TW68_V_SCALE_RATIO2(task), yscale >> 8);
-
-	mirror = (dev->ctl_mirror) ? 0x02 : 0x00;
-	if (yscale < 2048) {
-		/* LPI */
-		dprintk("yscale LPI yscale=%d\n", yscale);
-		twwriteb(TW68_V_FILTER(task), 0x00 | mirror);
-		twwriteb(TW68_LUMA_CONTRAST(task), 0x40);
-		twwriteb(TW68_CHROMA_SATURATION(task), 0x40);
-	} else {
-		/* ACM */
-		val = 0x40 * 1024 / yscale;
-		dprintk("yscale ACM yscale=%d val=0x%x\n", yscale, val);
-		twwriteb(TW68_V_FILTER(task), 0x01 | mirror);
-		twwriteb(TW68_LUMA_CONTRAST(task), val);
-		twwriteb(TW68_CHROMA_SATURATION(task), val);
-	}
-	twwriteb(TW68_LUMA_BRIGHT(task),       0x80);
-}
-
-static void set_size(struct tw68_dev *dev, int task,
-		     int width, int height, int interlace)
-{
-	int prescale, xscale, yscale, y_even, y_odd;
-	int h_start, h_stop, v_start, v_stop;
-	int div = interlace ? 2 : 1;
-
-	/* setup video scaler */
-	h_start = dev->crop_current.left;
-	v_start = dev->crop_current.top/2;
-	h_stop  = (dev->crop_current.left + dev->crop_current.width - 1);
-	v_stop  = (dev->crop_current.top + dev->crop_current.height - 1)/2;
-
-	twwriteb(TW68_VIDEO_H_START1(task), h_start &  0xff);
-	twwriteb(TW68_VIDEO_H_START2(task), h_start >> 8);
-	twwriteb(TW68_VIDEO_H_STOP1(task),  h_stop  &  0xff);
-	twwriteb(TW68_VIDEO_H_STOP2(task),  h_stop  >> 8);
-	twwriteb(TW68_VIDEO_V_START1(task), v_start &  0xff);
-	twwriteb(TW68_VIDEO_V_START2(task), v_start >> 8);
-	twwriteb(TW68_VIDEO_V_STOP1(task),  v_stop  &  0xff);
-	twwriteb(TW68_VIDEO_V_STOP2(task),  v_stop  >> 8);
-
-	prescale = dev->crop_current.width / width;
-	if (0 == prescale)
-		prescale = 1;
-	xscale = 1024 * dev->crop_current.width / prescale / width;
-	yscale = 512 * div * dev->crop_current.height / height;
-	dprintk("prescale=%d xscale=%d yscale=%d\n", prescale,
-		 xscale, yscale);
-	set_h_prescale(dev, task, prescale);
-	twwriteb(TW68_H_SCALE_INC1(task), xscale &  0xff);
-	twwriteb(TW68_H_SCALE_INC2(task), xscale >> 8);
-	set_v_scale(dev, task, yscale);
-
-	twwriteb(TW68_VIDEO_PIXELS1(task), width  & 0xff);
-	twwriteb(TW68_VIDEO_PIXELS2(task), width  >> 8);
-	twwriteb(TW68_VIDEO_LINES1(task),  height/div & 0xff);
-	twwriteb(TW68_VIDEO_LINES2(task),  height/div >> 8);
-
-	/* deinterlace y offsets */
-	y_odd  = dev->ctl_y_odd;
-	y_even = dev->ctl_y_even;
-	twwriteb(TW68_V_PHASE_OFFSET0(task), y_odd);
-	twwriteb(TW68_V_PHASE_OFFSET1(task), y_even);
-	twwriteb(TW68_V_PHASE_OFFSET2(task), y_odd);
-	twwriteb(TW68_V_PHASE_OFFSET3(task), y_even);
 }
 
 /* ------------------------------------------------------------------ */
@@ -778,6 +644,7 @@ struct cliplist {
 	__u8  disable;
 };
 
+#if 0	/* not yet implemented */
 static void set_cliplist(struct tw68_dev *dev, int reg,
 			 struct cliplist *cl, int entries, char *name)
 {
@@ -792,7 +659,7 @@ static void set_cliplist(struct tw68_dev *dev, int reg,
 		tw_writeb(reg + 0, winbits);
 		tw_writeb(reg + 2, cl[i].position & 0xff);
 		tw_writeb(reg + 3, cl[i].position >> 8);
-		dprintk("clip: %s winbits=%02x pos=%d\n",
+		dprintk(2, "clip: %s winbits=%02x pos=%d\n",
 			name, winbits, cl[i].position);
 		reg += 8;
 	}
@@ -855,8 +722,18 @@ static int setup_clipping(struct tw68_dev *dev, struct v4l2_clip *clips,
 	set_cliplist(dev, 0x384, row, rows, "rows");
 	return 0;
 }
+#endif
 
-static int verify_preview(struct tw68_dev *dev, struct v4l2_window *win)
+/*
+ * By default, this function returns an error if the supplied overlay window
+ * dimensions are not possible with the current cropping parameters.  If the
+ * parameter adjust_size is TRUE, the function will instead try to adjust the
+ * window width and/or height.  If the parameter adjust_crop is TRUE, the
+ * function may also attempt to adjust the current cropping parameters to get
+ * closer to the desired window size.
+ */
+static int verify_overlay(struct tw68_dev *dev, struct v4l2_window *win,
+			  int adjust_size, int adjust_crop)
 {
 	enum v4l2_field field;
 	int maxw, maxh;
@@ -898,17 +775,22 @@ static int verify_preview(struct tw68_dev *dev, struct v4l2_window *win)
 	return 0;
 }
 
-static int start_preview(struct tw68_dev *dev, struct tw68_fh *fh)
+static int start_overlay(struct tw68_dev *dev, struct tw68_fh *fh)
+{
+	return -EINVAL;
+}
+#ifdef	TEST_OVERLAY
+static int start_overlay(struct tw68_dev *dev, struct tw68_fh *fh)
 {
 	unsigned long base, control, bpl;
 	int err;
 
-	err = verify_preview(dev, &fh->win);
+	err = verify_overlay(dev, &fh->win, 0, 0);
 	if (0 != err)
 		return err;
 
 	dev->ovfield = fh->win.field;
-	dprintk("start_preview %dx%d+%d+%d %s field=%s\n",
+	dprintk(2, "start_overlay %dx%d+%d+%d %s field=%s\n",
 		fh->win.w.width, fh->win.w.height,
 		fh->win.w.left, fh->win.w.top,
 		dev->ovfmt->name, v4l2_field_names[dev->ovfield]);
@@ -951,14 +833,15 @@ static int start_preview(struct tw68_dev *dev, struct tw68_fh *fh)
 	tw68_set_dmabits(dev);
 	return 0;
 }
+#endif
 
-static int stop_preview(struct tw68_dev *dev, struct tw68_fh *fh)
+static int stop_overlay(struct tw68_dev *dev, struct tw68_fh *fh)
 {
 	dev->ovenable = 0;
 	tw68_set_dmabits(dev);
 	return 0;
 }
-#endif
+
 
 static int tw68_video_start_dma(struct tw68_dev *dev, struct tw68_dmaqueue *q,
 				struct tw68_buf *buf) {
@@ -1048,9 +931,9 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 
 	BUG_ON(NULL == fh->fmt);
 	maxw = dev->tvnorm->h_stop - dev->tvnorm->h_start + 1;
-	maxh = dev->tvnorm->video_v_stop - dev->tvnorm->video_v_start + 1;
-	if (V4L2_FIELD_HAS_BOTH(field))
-		maxh *= 2;
+	maxh = 2*(dev->tvnorm->video_v_stop - dev->tvnorm->video_v_start + 1);
+//	if (V4L2_FIELD_HAS_BOTH(field))
+//		maxh *= 2;
 	if (fh->width  < 48 || fh->width  > maxw || fh->height > maxh
 		|| fh->height < 16) {
 		dprintk(1, "%s: invalid dimensions - fh->width=%d, "
@@ -1089,7 +972,6 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 
 	if (init_buffer) {
 		buf->bpl = buf->vb.width * buf->fmt->depth >> 3;
-printk("%s: bpl is %d\n", __func__, buf->bpl);
 		switch (buf->vb.field) {
 		case V4L2_FIELD_TOP:
 			tw68_risc_buffer(dev->pci, &buf->risc,
@@ -1352,8 +1234,8 @@ static int tw68_s_ctrl_internal(struct tw68_dev *dev,  struct tw68_fh *fh,
 #if 0
 	if (restart_overlay && fh && res_check(fh, RESOURCE_OVERLAY)) {
 		spin_lock_irqsave(&dev->slock, flags);
-		stop_preview(dev, fh);
-		start_preview(dev, fh);
+		stop_overlay(dev, fh);
+		start_overlay(dev, fh);
 		spin_unlock_irqrestore(&dev->slock, flags);
 	}
 #endif
@@ -1549,7 +1431,7 @@ static int video_release(struct file *file)
 	/* turn off overlay */
 	if (res_check(fh, RESOURCE_OVERLAY)) {
 		spin_lock_irqsave(&dev->slock, flags);
-/*		stop_preview(dev,fh); */
+/*		stop_overlay(dev,fh); */
 		spin_unlock_irqrestore(&dev->slock, flags);
 		res_free(dev, fh, RESOURCE_OVERLAY);
 	}
@@ -1639,27 +1521,9 @@ static int tw68_g_fmt_vid_cap(struct file *file, void *priv,
 		(f->fmt.pix.width * fh->fmt->depth) >> 3;
 	f->fmt.pix.sizeimage =
 		f->fmt.pix.height * f->fmt.pix.bytesperline;
-printk("%s: width=%d, height=%d, bytesperline=%d, sizeimage=%d\n",
-  __func__, f->fmt.pix.width, f->fmt.pix.height, f->fmt.pix.bytesperline,
-  f->fmt.pix.sizeimage);
+	f->fmt.pix.colorspace	= V4L2_COLORSPACE_SMPTE170M;
 	return 0;
 }
-
-#if 0
-static int tw68_g_fmt_vid_overlay(struct file *file, void *priv,
-				struct v4l2_format *f)
-{
-	struct tw68_fh *fh = priv;
-
-	if (tw68_no_overlay > 0) {
-		printk(KERN_ERR "V4L2_BUF_TYPE_VIDEO_OVERLAY: no_overlay\n");
-		return -EINVAL;
-	}
-	f->fmt.win = fh->win;
-
-	return 0;
-}
-#endif
 
 static int tw68_try_fmt_vid_cap(struct file *file, void *priv,
 						struct v4l2_format *f)
@@ -1709,27 +1573,8 @@ static int tw68_try_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.sizeimage =
 		f->fmt.pix.height * f->fmt.pix.bytesperline;
 
-printk("%s: width=%d, height=%d, bytesperline=%d, sizeimage=%d\n",
-  __func__, f->fmt.pix.width, f->fmt.pix.height, f->fmt.pix.bytesperline,
-  f->fmt.pix.sizeimage);
 	return 0;
 }
-
-#if 0
-static int tw68_try_fmt_vid_overlay(struct file *file, void *priv,
-						struct v4l2_format *f)
-{
-	struct tw68_fh *fh = priv;
-	struct tw68_dev *dev = fh->dev;
-
-	if (tw68_no_overlay > 0) {
-		printk(KERN_ERR "V4L2_BUF_TYPE_VIDEO_OVERLAY: no_overlay\n");
-		return -EINVAL;
-	}
-
-	return verify_preview(dev, &f->fmt.win);
-}
-#endif
 
 /*
  * Note that tw68_s_fmt_vid_cap sets the information into the fh structure,
@@ -1751,10 +1596,29 @@ static int tw68_s_fmt_vid_cap(struct file *file, void *priv,
 	fh->width     = f->fmt.pix.width;
 	fh->height    = f->fmt.pix.height;
 	fh->cap.field = f->fmt.pix.field;
+	/*
+	 * The following lines are to make v4l2-test program happy.
+	 * The docs should be checked to assure they make sense.
+	 */
+	f->fmt.pix.colorspace	= V4L2_COLORSPACE_SMPTE170M;
+	f->fmt.pix.priv = 0;
 	return 0;
 }
 
-#if 0
+static int tw68_try_fmt_vid_overlay(struct file *file, void *priv,
+						struct v4l2_format *f)
+{
+	struct tw68_fh *fh = priv;
+	struct tw68_dev *dev = fh->dev;
+
+	if (tw68_no_overlay > 0) {
+		printk(KERN_ERR "V4L2_BUF_TYPE_VIDEO_OVERLAY: no_overlay\n");
+		return -EINVAL;
+	}
+
+	return verify_overlay(dev, &f->fmt.win, 0, 0);
+}
+
 static int tw68_s_fmt_vid_overlay(struct file *file, void *priv,
 					struct v4l2_format *f)
 {
@@ -1767,7 +1631,7 @@ static int tw68_s_fmt_vid_overlay(struct file *file, void *priv,
 		printk(KERN_ERR "V4L2_BUF_TYPE_VIDEO_OVERLAY: no_overlay\n");
 		return -EINVAL;
 	}
-	err = verify_preview(dev, &f->fmt.win);
+	err = verify_overlay(dev, &f->fmt.win, 0, 0);
 	if (0 != err)
 		return err;
 
@@ -1787,15 +1651,14 @@ static int tw68_s_fmt_vid_overlay(struct file *file, void *priv,
 
 	if (res_check(fh, RESOURCE_OVERLAY)) {
 		spin_lock_irqsave(&dev->slock, flags);
-		stop_preview(dev, fh);
-		start_preview(dev, fh);
+		stop_overlay(dev, fh);
+		start_overlay(dev, fh);
 		spin_unlock_irqrestore(&dev->slock, flags);
 	}
 
 	mutex_unlock(&dev->lock);
 	return 0;
 }
-#endif
 
 int tw68_queryctrl(struct file *file, void *priv, struct v4l2_queryctrl *c)
 {
@@ -1809,7 +1672,9 @@ int tw68_queryctrl(struct file *file, void *priv, struct v4l2_queryctrl *c)
 #endif
 		return -EINVAL;
 	ctrl = ctrl_by_id(c->id);
-	*c = (NULL != ctrl) ? *ctrl : no_ctrl;
+	if (NULL == ctrl)
+		return -EINVAL;
+	*c = *ctrl;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(tw68_queryctrl);
@@ -1908,7 +1773,7 @@ static int tw68_querycap(struct file *file, void  *priv,
 	return 0;
 }
 
-int tw68_s_std_internal(struct tw68_dev *dev, struct tw68_fh *fh,
+static int tw68_s_std_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 			v4l2_std_id *id)
 {
 /*	unsigned long flags; */
@@ -1961,18 +1826,17 @@ int tw68_s_std_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 	}
 
 	*id = tvnorms[i].id;
-
 	mutex_lock(&dev->lock);
 #if 0
 	if (fh && res_check(fh, RESOURCE_OVERLAY)) {
 		spin_lock_irqsave(&dev->slock, flags);
-		stop_preview(dev, fh);
+		stop_overlay(dev, fh);
 		spin_unlock_irqrestore(&dev->slock, flags);
 
 		set_tvnorm(dev, &tvnorms[i]);
 
 		spin_lock_irqsave(&dev->slock, flags);
-		start_preview(dev, fh);
+		start_overlay(dev, fh);
 		spin_unlock_irqrestore(&dev->slock, flags);
 	} else
 #endif
@@ -1982,7 +1846,6 @@ int tw68_s_std_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 	mutex_unlock(&dev->lock);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(tw68_s_std_internal);
 
 static int tw68_s_std(struct file *file, void *priv, v4l2_std_id *id)
 {
@@ -2000,90 +1863,7 @@ static int tw68_g_std(struct file *file, void *priv, v4l2_std_id *id)
 	return 0;
 }
 
-static int tw68_cropcap(struct file *file, void *priv,
-					struct v4l2_cropcap *cap)
-{
-	struct tw68_fh *fh = priv;
-	struct tw68_dev *dev = fh->dev;
-
 #if 0
-	if (cap->type != V4L2_BUF_TYPE_VIDEO_CAPTURE &&
-	    cap->type != V4L2_BUF_TYPE_VIDEO_OVERLAY)
-#endif
-	if (cap->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
-		return -EINVAL;
-	cap->bounds  = dev->crop_bounds;
-	cap->defrect = dev->crop_defrect;
-	cap->pixelaspect.numerator   = 1;
-	cap->pixelaspect.denominator = 1;
-	if (dev->tvnorm->id & V4L2_STD_525_60) {
-		cap->pixelaspect.numerator   = 11;
-		cap->pixelaspect.denominator = 10;
-	}
-	if (dev->tvnorm->id & V4L2_STD_625_50) {
-		cap->pixelaspect.numerator   = 54;
-		cap->pixelaspect.denominator = 59;
-	}
-	return 0;
-}
-
-static int tw68_g_crop(struct file *file, void *f, struct v4l2_crop *crop)
-{
-	struct tw68_fh *fh = f;
-	struct tw68_dev *dev = fh->dev;
-
-#if 0
-	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE &&
-	    crop->type != V4L2_BUF_TYPE_VIDEO_OVERLAY)
-#endif
-	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
-		return -EINVAL;
-	crop->c = dev->crop_current;
-	return 0;
-}
-
-static int tw68_s_crop(struct file *file, void *f, struct v4l2_crop *crop)
-{
-	struct tw68_fh *fh = f;
-	struct tw68_dev *dev = fh->dev;
-	struct v4l2_rect *b = &dev->crop_bounds;
-
-#if 0
-	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE &&
-	    crop->type != V4L2_BUF_TYPE_VIDEO_OVERLAY)
-#endif
-	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
-		return -EINVAL;
-	if (crop->c.height < 0)
-		return -EINVAL;
-	if (crop->c.width < 0)
-		return -EINVAL;
-
-#if 0
-	if (res_locked(fh->dev, RESOURCE_OVERLAY))
-		return -EBUSY;
-#endif
-	if (res_locked(fh->dev, RESOURCE_VIDEO))
-		return -EBUSY;
-
-	if (crop->c.top < b->top)
-		crop->c.top = b->top;
-	if (crop->c.top > b->top + b->height)
-		crop->c.top = b->top + b->height;
-	if (crop->c.height > b->top - crop->c.top + b->height)
-		crop->c.height = b->top - crop->c.top + b->height;
-
-	if (crop->c.left < b->left)
-		crop->c.left = b->left;
-	if (crop->c.left > b->left + b->width)
-		crop->c.left = b->left + b->width;
-	if (crop->c.width > b->left - crop->c.left + b->width)
-		crop->c.width = b->left - crop->c.left + b->width;
-
-	dev->crop_current = crop->c;
-	return 0;
-}
-
 static int tw68_g_tuner(struct file *file, void *priv,
 					struct v4l2_tuner *t)
 {
@@ -2097,6 +1877,8 @@ static int tw68_g_tuner(struct file *file, void *priv,
 	for (n = 0; n < TW68_INPUT_MAX; n++)
 		if (card_in(dev, n).tv)
 			break;
+	if (n == TW68_INPUT_MAX)
+		return -EINVAL;
 	if (NULL != card_in(dev, n).name) {
 		strcpy(t->name, "Television");
 		t->type = V4L2_TUNER_ANALOG_TV;
@@ -2186,6 +1968,7 @@ static int tw68_s_audio(struct file *file, void *priv, struct v4l2_audio *a)
 {
 	return 0;
 }
+#endif
 
 static int tw68_g_priority(struct file *file, void *f, enum v4l2_priority *p)
 {
@@ -2219,7 +2002,88 @@ static int tw68_enum_fmt_vid_cap(struct file *file, void  *priv,
 	return 0;
 }
 
+static int tw68_cropcap(struct file *file, void *priv,
+					struct v4l2_cropcap *cap)
+{
+	struct tw68_fh *fh = priv;
+	struct tw68_dev *dev = fh->dev;
+
+	if (cap->type != V4L2_BUF_TYPE_VIDEO_CAPTURE &&
+	    cap->type != V4L2_BUF_TYPE_VIDEO_OVERLAY) 
 #if 0
+	if (cap->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+#endif
+		return -EINVAL;
+	cap->bounds  = dev->crop_bounds;
+	cap->defrect = dev->crop_defrect;
+	cap->pixelaspect.numerator   = 1;
+	cap->pixelaspect.denominator = 1;
+	if (dev->tvnorm->id & V4L2_STD_525_60) {
+		cap->pixelaspect.numerator   = 11;
+		cap->pixelaspect.denominator = 10;
+	}
+	if (dev->tvnorm->id & V4L2_STD_625_50) {
+		cap->pixelaspect.numerator   = 54;
+		cap->pixelaspect.denominator = 59;
+	}
+	return 0;
+}
+
+static int tw68_g_crop(struct file *file, void *f, struct v4l2_crop *crop)
+{
+	struct tw68_fh *fh = f;
+	struct tw68_dev *dev = fh->dev;
+
+	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE &&
+	    crop->type != V4L2_BUF_TYPE_VIDEO_OVERLAY)
+#if 0
+	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+#endif
+		return -EINVAL;
+	crop->c = dev->crop_current;
+	return 0;
+}
+
+static int tw68_s_crop(struct file *file, void *f, struct v4l2_crop *crop)
+{
+	struct tw68_fh *fh = f;
+	struct tw68_dev *dev = fh->dev;
+	struct v4l2_rect *b = &dev->crop_bounds;
+
+	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE &&
+	    crop->type != V4L2_BUF_TYPE_VIDEO_OVERLAY)
+#if 0
+	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+#endif
+		return -EINVAL;
+	if (crop->c.height < 0)
+		return -EINVAL;
+	if (crop->c.width < 0)
+		return -EINVAL;
+
+	if (res_locked(fh->dev, RESOURCE_OVERLAY))
+		return -EBUSY;
+	if (res_locked(fh->dev, RESOURCE_VIDEO))
+		return -EBUSY;
+
+	if (crop->c.top < b->top)
+		crop->c.top = b->top;
+	if (crop->c.top > b->top + b->height)
+		crop->c.top = b->top + b->height;
+	if (crop->c.height > b->top - crop->c.top + b->height)
+		crop->c.height = b->top - crop->c.top + b->height;
+
+	if (crop->c.left < b->left)
+		crop->c.left = b->left;
+	if (crop->c.left > b->left + b->width)
+		crop->c.left = b->left + b->width;
+	if (crop->c.width > b->left - crop->c.left + b->width)
+		crop->c.width = b->left - crop->c.left + b->width;
+
+	dev->crop_current = crop->c;
+	return 0;
+}
+
 static int tw68_enum_fmt_vid_overlay(struct file *file, void  *priv,
 					struct v4l2_fmtdesc *f)
 {
@@ -2228,7 +2092,7 @@ static int tw68_enum_fmt_vid_overlay(struct file *file, void  *priv,
 		return -EINVAL;
 	}
 
-	if ((f->index >= FORMATS) || formats[f->index].planar)
+	if ((f->index >= FORMATS) /* || formats[f->index].planar */)
 		return -EINVAL;
 
 	strlcpy(f->description, formats[f->index].name,
@@ -2238,7 +2102,6 @@ static int tw68_enum_fmt_vid_overlay(struct file *file, void  *priv,
 
 	return 0;
 }
-#endif
 
 static int tw68_g_fbuf(struct file *file, void *f,
 				struct v4l2_framebuffer *fb)
@@ -2277,7 +2140,20 @@ static int tw68_s_fbuf(struct file *file, void *f,
 	return 0;
 }
 
-#if 0
+static int tw68_g_fmt_vid_overlay(struct file *file, void *priv,
+				struct v4l2_format *f)
+{
+	struct tw68_fh *fh = priv;
+
+	if (tw68_no_overlay > 0) {
+		printk(KERN_ERR "V4L2_BUF_TYPE_VIDEO_OVERLAY: no_overlay\n");
+		return -EINVAL;
+	}
+	f->fmt.win = fh->win;
+
+	return 0;
+}
+
 static int tw68_overlay(struct file *file, void *f, unsigned int on)
 {
 	struct tw68_fh *fh = f;
@@ -2286,27 +2162,25 @@ static int tw68_overlay(struct file *file, void *f, unsigned int on)
 
 	if (on) {
 		if (tw68_no_overlay > 0) {
-			dprintk("no_overlay\n");
+			dprintk(1, "no_overlay\n");
 			return -EINVAL;
 		}
 
 		if (!res_get(dev, fh, RESOURCE_OVERLAY))
 			return -EBUSY;
 		spin_lock_irqsave(&dev->slock, flags);
-		start_preview(dev, fh);
+		start_overlay(dev, fh);
 		spin_unlock_irqrestore(&dev->slock, flags);
-	}
-	if (!on) {
+	} else {
 		if (!res_check(fh, RESOURCE_OVERLAY))
 			return -EINVAL;
 		spin_lock_irqsave(&dev->slock, flags);
-		stop_preview(dev, fh);
+		stop_overlay(dev, fh);
 		spin_unlock_irqrestore(&dev->slock, flags);
 		res_free(dev, fh, RESOURCE_OVERLAY);
 	}
 	return 0;
 }
-#endif
 
 #ifdef CONFIG_VIDEO_V4L1_COMPAT
 static int vidiocgmbuf(struct file *file, void *priv, struct video_mbuf *mbuf)
@@ -2369,12 +2243,6 @@ static int tw68_streamoff(struct file *file, void *priv,
 	if (err < 0)
 		return err;
 	res_free(dev, fh, res);
-	return 0;
-}
-
-static int tw68_g_parm(struct file *file, void *fh,
-				struct v4l2_streamparm *parm)
-{
 	return 0;
 }
 
@@ -2476,21 +2344,6 @@ static const struct v4l2_file_operations video_fops = {
 static const struct v4l2_ioctl_ops video_ioctl_ops = {
 	.vidioc_querycap		= tw68_querycap,
 	.vidioc_enum_fmt_vid_cap	= tw68_enum_fmt_vid_cap,
-	.vidioc_g_fmt_vid_cap		= tw68_g_fmt_vid_cap,
-	.vidioc_try_fmt_vid_cap		= tw68_try_fmt_vid_cap,
-	.vidioc_s_fmt_vid_cap		= tw68_s_fmt_vid_cap,
-#if 0
-	.vidioc_enum_fmt_vid_overlay	= tw68_enum_fmt_vid_overlay,
-	.vidioc_g_fmt_vid_overlay	= tw68_g_fmt_vid_overlay,
-	.vidioc_try_fmt_vid_overlay	= tw68_try_fmt_vid_overlay,
-	.vidioc_s_fmt_vid_overlay	= tw68_s_fmt_vid_overlay,
-	.vidioc_g_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
-	.vidioc_try_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
-	.vidioc_s_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
-#endif
-	.vidioc_g_audio			= tw68_g_audio,
-	.vidioc_s_audio			= tw68_s_audio,
-	.vidioc_cropcap			= tw68_cropcap,
 	.vidioc_reqbufs			= tw68_reqbufs,
 	.vidioc_querybuf		= tw68_querybuf,
 	.vidioc_qbuf			= tw68_qbuf,
@@ -2505,23 +2358,43 @@ static const struct v4l2_ioctl_ops video_ioctl_ops = {
 	.vidioc_s_ctrl			= tw68_s_ctrl,
 	.vidioc_streamon		= tw68_streamon,
 	.vidioc_streamoff		= tw68_streamoff,
-	.vidioc_g_tuner			= tw68_g_tuner,
-	.vidioc_s_tuner			= tw68_s_tuner,
-#ifdef CONFIG_VIDEO_V4L1_COMPAT
-	.vidiocgmbuf			= vidiocgmbuf,
-#endif
+	.vidioc_g_priority		= tw68_g_priority,
+	.vidioc_s_priority		= tw68_s_priority,
+	.vidioc_g_fmt_vid_cap		= tw68_g_fmt_vid_cap,
+	.vidioc_try_fmt_vid_cap		= tw68_try_fmt_vid_cap,
+	.vidioc_s_fmt_vid_cap		= tw68_s_fmt_vid_cap,
+/*
+ * The following functions are related to overlay, and are not considered
+ * completely stable yet.
+ */
+	.vidioc_cropcap			= tw68_cropcap,
 	.vidioc_g_crop			= tw68_g_crop,
 	.vidioc_s_crop			= tw68_s_crop,
 	.vidioc_g_fbuf			= tw68_g_fbuf,
 	.vidioc_s_fbuf			= tw68_s_fbuf,
-#if 0
+	.vidioc_enum_fmt_vid_overlay	= tw68_enum_fmt_vid_overlay,
+	.vidioc_g_fmt_vid_overlay	= tw68_g_fmt_vid_overlay,
+/*
+ * Functions not yet implemented / not yet passing tests.
+ */
 	.vidioc_overlay			= tw68_overlay,
-#endif
-	.vidioc_g_priority		= tw68_g_priority,
-	.vidioc_s_priority		= tw68_s_priority,
-	.vidioc_g_parm			= tw68_g_parm,
+	.vidioc_try_fmt_vid_overlay	= tw68_try_fmt_vid_overlay,
+	.vidioc_s_fmt_vid_overlay	= tw68_s_fmt_vid_overlay,
+
+#if 0
+	.vidioc_g_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
+	.vidioc_try_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
+	.vidioc_s_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
+	.vidioc_g_audio			= tw68_g_audio,
+	.vidioc_s_audio			= tw68_s_audio,
+	.vidioc_g_tuner			= tw68_g_tuner,
+	.vidioc_s_tuner			= tw68_s_tuner,
 	.vidioc_g_frequency		= tw68_g_frequency,
 	.vidioc_s_frequency		= tw68_s_frequency,
+#endif
+#ifdef CONFIG_VIDEO_V4L1_COMPAT
+	.vidiocgmbuf			= vidiocgmbuf,
+#endif
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 	.vidioc_log_status		= vidioc_log_status,
 	.vidioc_g_register              = vidioc_g_register,
