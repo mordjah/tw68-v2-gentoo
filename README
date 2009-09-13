@@ -1,0 +1,19 @@
+The files in this subdirectory should be able to be used to compile and
+install a driver for the TW6800-series chipset.  In order to do this
+compilation, the system being used for compilation should contain the
+current kernel sources, or at least the "kernel-headers" and the
+"kernel-development" packages (different names may be used for these
+on different distrubutions).
+
+
+Current Status - 13 September 2009 10:30am HK Time
+--------------------------------------------------
+
+The basic functionality for using the TW6800 video in "grabdisplay" mode
+is reasonably stable.  The "overlay" mode and window clipping are not yet
+functional.  There is no support for eeprom, audio or transport stream at
+this time.
+
+There is a known problem if the application program tries to dynamically
+change the scaling of the captured video.  This can result in loss of
+picture, and (at least) some logged error messages.
