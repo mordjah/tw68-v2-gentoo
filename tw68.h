@@ -102,7 +102,6 @@ struct tw68_tvnorm {
 	unsigned int	video_v_stop;
 	unsigned int	vbi_v_start_0;
 	unsigned int	vbi_v_stop_0;
-	unsigned int	src_timing;
 	unsigned int	vbi_v_start_1;
 
 	/* Techwell specific */
@@ -188,9 +187,8 @@ struct tw68_board {
 /* ----------------------------------------------------------- */
 /* device / file handle status                                 */
 
-#define	RESOURCE_OVERLAY		1
-#define	RESOURCE_VIDEO			2
-#define	RESOURCE_VBI			4
+#define	RESOURCE_VIDEO			1
+#define	RESOURCE_VBI			2
 
 #define	INTERLACE_AUTO			0
 #define	INTERLACE_ON			1
@@ -245,15 +243,10 @@ struct tw68_fh {
 	unsigned int		resources;
 	enum v4l2_priority	prio;
 
-	/* video overlay */
-	struct v4l2_window	win;
-	struct v4l2_clip	clips[8];
-	unsigned int		nclips;
-
 	/* video capture */
 	struct tw68_format	*fmt;
 	unsigned int		width,height;
-	struct videobuf_queue	cap;
+	struct videobuf_queue	cap;	/* also used for overlay */
 
 	/* vbi capture */
 	struct videobuf_queue	vbi;
@@ -373,13 +366,6 @@ struct tw68_dev {
 	wait_queue_head_t	i2c_queue;
 	unsigned char		eedata[256];
 
-
-	/* video overlay */
-	struct v4l2_framebuffer	ovbuf;
-	struct tw68_format	*ovfmt;
-	unsigned int		ovenable;
-	enum v4l2_field		ovfield;
-
 	/* video+ts+vbi capture */
 	struct tw68_dmaqueue	video_q;
 	struct tw68_dmaqueue	vbi_q;
@@ -471,7 +457,6 @@ static inline struct tw68_dev *to_tw68_dev(struct v4l2_device *v4l2_dev)
 
 extern struct list_head  tw68_devlist;
 extern struct mutex tw68_devlist_lock;
-extern int tw68_no_overlay;
 extern unsigned int irq_debug;
 
 int tw68_buffer_count(unsigned int size, unsigned int count);
@@ -538,16 +523,6 @@ int tw68_vbi_fini(struct tw68_dev *dev);
 void tw68_irq_vbi_done(struct tw68_dev *dev, unsigned long status);
 
 /* ----------------------------------------------------------- */
-/* tw68-input.c                                                */
-
-int tw68_input_init1(struct tw68_dev *dev);
-void tw68_input_fini(struct tw68_dev *dev);
-void tw68_input_irq(struct tw68_dev *dev);
-void tw68_set_i2c_ir(struct tw68_dev *dev, struct IR_i2c *ir);
-void tw68_ir_start(struct tw68_dev *dev, struct card_ir *ir);
-void tw68_ir_stop(struct tw68_dev *dev);
-
-/* ----------------------------------------------------------- */
 /* tw68-tvaudio.c                                              */
 
 int tw68_tvaudio_rx2mode(u32 rx);
@@ -572,3 +547,5 @@ int tw68_risc_buffer(struct pci_dev *pci, struct btcx_riscmem *risc,
 	unsigned int bottom_offset, unsigned int bpl,
 	unsigned int padding, unsigned int lines);
 int tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc);
+int tw68_risc_overlay(struct tw68_fh *fh, struct btcx_riscmem *risc,
+		      int field_type);

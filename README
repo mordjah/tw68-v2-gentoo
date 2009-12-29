@@ -28,3 +28,12 @@ Small enhancement to Makefile for "make insmod"
  - suppressed error message if module was previously loaded
  - added in some modprobe's to assure required helper modules are loaded
 
+26 December 2009
+Removed all code trying to implement overlay mode.  Changed capabilites
+to show V4L2_CAP_VIDEO_OVERLAY not present.
+Removed modules tw68-controls.c, tw68-fileops.c and tw68-input.c.
+
+27 December 2009
+Enhanced code to handle cropping, as well as the tw68_set_scale routine.
+Changed debug prints to require video_debug >= 40 or 50 for low-level buffer
+messages.

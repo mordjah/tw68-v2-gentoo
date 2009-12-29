@@ -68,12 +68,6 @@ static unsigned int latency = UNSET;
 module_param(latency, int, 0444);
 MODULE_PARM_DESC(latency, "pci latency timer");
 
-int tw68_no_overlay = -1;
-module_param_named(no_overlay, tw68_no_overlay, int, 0444);
-MODULE_PARM_DESC(no_overlay, "allow override overlay default (0 disables, "
-		"1 enables) [some VIA/SIS chipsets are known to "
-		"have problem with overlay]");
-
 static unsigned int nocomb;
 module_param(nocomb, int, 0644);
 MODULE_PARM_DESC(nocomb, "disable comb filter");
@@ -127,6 +121,29 @@ void tw68_dma_free(struct videobuf_queue *q, struct tw68_buf *buf)
 }
 
 /* ------------------------------------------------------------------ */
+/* ------------- placeholders for later development ----------------- */
+
+static int tw68_input_init1(struct tw68_dev *dev)
+{
+	return 0;
+}
+
+static void tw68_input_fini(struct tw68_dev *dev)
+{
+	return;
+}
+
+static void tw68_ir_start(struct tw68_dev *dev, struct card_ir *ir)
+{
+	return;
+}
+
+static void tw68_ir_stop(struct tw68_dev *dev)
+{
+	return;
+}
+
+/* ------------------------------------------------------------------ */
 /*
  * Buffer handling routines
  *
@@ -145,7 +162,7 @@ int tw68_buffer_requeue(struct tw68_dev *dev,
 	dprintk(100, "%s: called\n", __func__);
 	if (!list_empty(&q->active)) {
 		buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
-		dprintk(10, "%s: [%p/%d] restart dma\n", __func__,
+		dprintk(40, "%s: [%p/%d] restart dma\n", __func__,
 			buf, buf->vb.i);
 		q->start_dma(dev, q, buf);
 		mod_timer(&q->timeout, jiffies + BUFFER_TIMEOUT);
@@ -163,14 +180,14 @@ int tw68_buffer_requeue(struct tw68_dev *dev,
 			q->start_dma(dev, q, buf);
 			buf->activate(dev, buf, NULL);
 			mod_timer(&q->timeout, jiffies + BUFFER_TIMEOUT);
-			dprintk(10, "%s: [%p/%d] first active\n",
+			dprintk(40, "%s: [%p/%d] first active\n",
 				__func__, buf, buf->vb.i);
 
 		} else if (q->buf_compat(prev, buf)) {
 			list_move_tail(&buf->vb.queue, &q->active);
 			buf->activate(dev, buf, NULL);
 			prev->risc.jmp[1] = cpu_to_le32(buf->risc.dma);
-			dprintk(10, "%s: [%p/%d] move to active\n",
+			dprintk(40, "%s: [%p/%d] move to active\n",
 				__func__, buf, buf->vb.i);
 		} else {
 			return 0;
@@ -218,7 +235,7 @@ void tw68_wakeup(struct tw68_dmaqueue *q, unsigned int *fc)
 	buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
 	do_gettimeofday(&buf->vb.ts);
 	buf->vb.field_count = (*fc)++;
-	dprintk(1, "%s: [%p/%d] field_count=%d\n",
+	dprintk(50, "%s: [%p/%d] field_count=%d\n",
 		__func__, buf, buf->vb.i, *fc);
 	buf->vb.state = VIDEOBUF_DONE;
 	list_del(&buf->vb.queue);
@@ -238,7 +255,7 @@ void tw68_buffer_queue(struct tw68_dev *dev,
 	struct tw68_buf    *prev;
 
 	assert_spin_locked(&dev->slock);
-	dprintk(1, "%s: queuing buffer %p\n", __func__, buf);
+	dprintk(50, "%s: queuing buffer %p\n", __func__, buf);
 
 	/* append a 'JUMP to stopper' to the buffer risc program */
 	buf->risc.jmp[0] = cpu_to_le32(RISC_JUMP | RISC_INT_BIT);
@@ -253,12 +270,12 @@ void tw68_buffer_queue(struct tw68_dev *dev,
 	if (!list_empty(&q->queued)) {
 		list_add_tail(&buf->vb.queue, &q->queued);
 		buf->vb.state = VIDEOBUF_QUEUED;
-		dprintk(10, "%s: [%p/%d] appended to queued\n",
+		dprintk(40, "%s: [%p/%d] appended to queued\n",
 			__func__, buf, buf->vb.i);
 
 	/* else if the 'active' chain doesn't yet exist we create it now */
 	} else if (list_empty(&q->active)) {
-		dprintk(10, "%s: [%p/%d] first active\n",
+		dprintk(40, "%s: [%p/%d] first active\n",
 			__func__, buf, buf->vb.i);
 		list_add_tail(&buf->vb.queue, &q->active);
 		q->start_dma(dev, q, buf);	/* 1st one - start dma */
@@ -276,13 +293,13 @@ void tw68_buffer_queue(struct tw68_dev *dev,
 			/* the param 'prev' is only for debug printing */
 			buf->activate(dev, buf, prev);
 			list_add_tail(&buf->vb.queue, &q->active);
-			dprintk(10, "%s: [%p/%d] appended to active\n",
+			dprintk(40, "%s: [%p/%d] appended to active\n",
 				__func__, buf, buf->vb.i);
 		} else {
 			/* If "incompatible", append to queued chain */
 			list_add_tail(&buf->vb.queue, &q->queued);
 			buf->vb.state = VIDEOBUF_QUEUED;
-			dprintk(10, "%s: [%p/%d] incompatible - appended "
+			dprintk(40, "%s: [%p/%d] incompatible - appended "
 				"to queued\n", __func__, buf, buf->vb.i);
 		}
 	}
@@ -439,9 +456,9 @@ static void __devinit must_configure_manually(void)
 	       "tw68:  cents for a eeprom, thus your pci board has no\n"
 	       "tw68:  subsystem ID and I can't identify it automatically\n"
 	       "tw68: </rant>\n"
-	       "tw68: I feel better now.  Ok, here are the good news:\n"
+	       "tw68: I feel better now.  Ok, here is the good news:\n"
 	       "tw68: You can use the card=<nr> insmod option to specify\n"
-	       "tw68: which board do you have.  The list:\n");
+	       "tw68: which board you have.  The list:\n");
 	for (i = 0; i < tw68_bcount; i++) {
 		printk(KERN_WARNING "tw68:   card=%d -> %-40.40s",
 		       i, tw68_boards[i].name);
@@ -504,7 +521,7 @@ static struct video_device *vdev_init(struct tw68_dev *dev,
 	vfd->minor   = -1;
 	vfd->parent  = &dev->pci->dev;
 	vfd->release = video_device_release;
-	vfd->debug   = video_debug;
+//	vfd->debug   = tw_video_debug;
 	snprintf(vfd->name, sizeof(vfd->name), "%s %s (%s)",
 		 dev->name, type, tw68_boards[dev->board].name);
 	return vfd;
@@ -609,22 +626,6 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 			latency = 0x0A;
 		}
 #endif
-		if (pci_pci_problems & (PCIPCI_FAIL|PCIAGP_FAIL)) {
-			printk(KERN_INFO "%s: quirk: this driver and your "
-					"chipset may not work together"
-					" in overlay mode.\n", dev->name);
-			if (!tw68_no_overlay) {
-				printk(KERN_INFO "%s: quirk: overlay "
-						"mode will be disabled.\n",
-						dev->name);
-				tw68_no_overlay = 1;
-			} else {
-				printk(KERN_INFO "%s: quirk: overlay "
-						"mode will be forced. Use this"
-						" option at your own risk.\n",
-						dev->name);
-			}
-		}
 	}
 	if (UNSET != latency) {
 		printk(KERN_INFO "%s: setting pci latency timer to %d\n",
@@ -745,11 +746,6 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 	if (TUNER_ABSENT != dev->tuner_type)
 		tw_call_all(dev, core, s_standby, 0);
 #endif
-
-	/* register v4l devices */
-	if (tw68_no_overlay > 0)
-		printk(KERN_INFO "%s: Overlay support disabled.\n",
-			dev->name);
 
 	dev->video_dev = vdev_init(dev, &tw68_video_template, "video");
 	err = video_register_device(dev->video_dev, VFL_TYPE_GRABBER,
@@ -874,9 +870,6 @@ static int tw68_suspend(struct pci_dev *pci_dev , pm_message_t state)
 	struct v4l2_device *v4l2_dev = pci_get_drvdata(pci_dev);
 	struct tw68_dev *dev = container_of(v4l2_dev,
 				struct tw68_dev, v4l2_dev);
-
-	/* disable overlay - apps should enable it explicitly on resume*/
-	dev->ovenable = 0;
 
 	tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 	dev->pci_irqmask &= ~TW68_VID_INTS;

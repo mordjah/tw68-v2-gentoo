@@ -1,13 +1,8 @@
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
 
-#tw68-objs := tw68-core.o tw68-cards.o tw68-i2c.o tw68-video.o \
-	tw68-controls.o tw68-fileops.o tw68-ioctls.o tw68-vbi.o \
-	tw68-ts.o tw68-risc.o tw68-input.o tw68-tvaudio.o
-
-tw68-objs := tw68-core.o tw68-cards.o tw68-video.o \
-	tw68-controls.o tw68-fileops.o tw68-ioctls.o tw68-vbi.o \
-	tw68-ts.o tw68-risc.o tw68-input.o tw68-tvaudio.o
+tw68-objs := tw68-core.o tw68-cards.o tw68-video.o tw68-ioctls.o \
+	     tw68-vbi.o tw68-ts.o tw68-risc.o tw68-tvaudio.o
 
 obj-m += tw68.o
 
