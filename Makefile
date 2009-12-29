@@ -1,7 +1,11 @@
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
 
-tw68-objs := tw68-core.o tw68-cards.o tw68-i2c.o tw68-video.o \
+#tw68-objs := tw68-core.o tw68-cards.o tw68-i2c.o tw68-video.o \
+	tw68-controls.o tw68-fileops.o tw68-ioctls.o tw68-vbi.o \
+	tw68-ts.o tw68-risc.o tw68-input.o tw68-tvaudio.o
+
+tw68-objs := tw68-core.o tw68-cards.o tw68-video.o \
 	tw68-controls.o tw68-fileops.o tw68-ioctls.o tw68-vbi.o \
 	tw68-ts.o tw68-risc.o tw68-input.o tw68-tvaudio.o
 
@@ -20,7 +24,10 @@ clean:
 	rm -rf modules.order videotest
 
 insmod: all
-	-sudo rmmod tw68
+	-sudo rmmod tw68 2>&1 > /dev/null
+	sudo modprobe v4l2_common
+	sudo modprobe videobuf_dma_sg
+	sudo modprobe btcx_risc
 	sudo insmod tw68.ko core_debug=10 video_debug=10
 
 run: insmod

@@ -17,3 +17,14 @@ this time.
 There is a known problem if the application program tries to dynamically
 change the scaling of the captured video.  This can result in loss of
 picture, and (at least) some logged error messages.
+
+--------------------------------------------------
+    |            |
+    | Change Log |
+    |            |
+--------------------------------------------------
+16 December 2009
+Small enhancement to Makefile for "make insmod"
+ - suppressed error message if module was previously loaded
+ - added in some modprobe's to assure required helper modules are loaded
+
