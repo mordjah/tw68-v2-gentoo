@@ -35,5 +35,22 @@ Removed modules tw68-controls.c, tw68-fileops.c and tw68-input.c.
 
 27 December 2009
 Enhanced code to handle cropping, as well as the tw68_set_scale routine.
-Changed debug prints to require video_debug >= 40 or 50 for low-level buffer
-messages.
+Adjusted the values in tw68-video's NORM_625_50 to improve xawtv's display.
+Changed debug prints in tw68-video.c to provide better granularity
+(allow better control over which messages to print).
+
+31 December 2009
+Removed source module tw68-ioctls.c
+Cleaned up all messages from checkpatch.pl
+Adjusted debug levels to further reduce log messages for trouble-free runs
+Bumped version number to 0.0.2 :-)
+
+01 January 2010
+Re-examined all control register initialisations; took into account all of
+the comments from Cavok's previous checking, changed several accordingly, and
+removed the comments. Added some amplification to comments on settings.
+
+03 January 2010
+Adjusted the values in tw68-video's NORM_525_60 using a very cheap NTSC
+camera.
+Added code for V4L2_CID_COLOR_KILLER and V4L2_CID_CHROMA_AGC

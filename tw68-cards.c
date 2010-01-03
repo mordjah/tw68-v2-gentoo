@@ -1,6 +1,6 @@
 /*
  *  device driver for Techwell 68xx based cards
- *  
+ *
  *  Much of this code is derived from the cx88 and sa7134 drivers, which
  *  were in turn derived from the bt87x driver.  The original work was by
  *  Gerd Knorr; more recently the code was enhanced by Mauro Carvalho Chehab,
@@ -65,19 +65,21 @@ struct tw68_board tw68_boards[] = {
 		.tuner_addr	= ADDR_UNSET,
 		.radio_addr	= ADDR_UNSET,
 
-		.inputs         = {{
-			.name = name_comp1,
-			.vmux = 0,
-		},{
-			.name = name_comp2,
-			.vmux = 1,
-		},{
-			.name = name_comp3,
-			.vmux = 2,
-		},{
-			.name = name_comp4,
-			.vmux = 3,
-		}},
+		.inputs         = {
+			{
+				.name = name_comp1,
+				.vmux = 0,
+			}, {
+				.name = name_comp2,
+				.vmux = 1,
+			}, {
+				.name = name_comp3,
+				.vmux = 2,
+			}, {
+				.name = name_comp4,
+				.vmux = 3,
+			}
+		},
 	},
 };
 
@@ -95,13 +97,13 @@ struct pci_device_id tw68_pci_tbl[] = {
 		.subvendor	= PCI_ANY_ID,
 		.subdevice	= PCI_ANY_ID,
 		.driver_data	= TW68_BOARD_UNKNOWN,
-	},{
+	}, {
 		.vendor		= PCI_VENDOR_ID_TECHWELL,
 		.device		= PCI_DEVICE_ID_VIDEO4,
 		.subvendor	= PCI_ANY_ID,
 		.subdevice	= PCI_ANY_ID,
 		.driver_data	= TW68_BOARD_UNKNOWN,
-	},{
+	}, {
 		/* end of list */
 	}
 };

@@ -27,7 +27,7 @@
  */
 
 #include <linux/version.h>
-#define	TW68_VERSION_CODE	KERNEL_VERSION(0,0,1)
+#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 2)
 
 #include <linux/pci.h>
 #include <linux/i2c.h>
@@ -68,10 +68,10 @@
 #define	TW68_PCI_ID_TECHWELL	0x1797
 
 #define TW68_NORMS (\
-	V4L2_STD_NTSC_M|  V4L2_STD_NTSC_M_JP|  V4L2_STD_NTSC_443 | \
-	V4L2_STD_PAL_BG|  V4L2_STD_PAL_DK   |  V4L2_STD_PAL_I    | \
-	V4L2_STD_PAL_M |  V4L2_STD_PAL_N    |  V4L2_STD_PAL_Nc   | \
-	V4L2_STD_PAL_60|  V4L2_STD_SECAM_L  |  V4L2_STD_SECAM_DK )
+	V4L2_STD_NTSC_M | V4L2_STD_NTSC_M_JP | V4L2_STD_NTSC_443 | \
+	V4L2_STD_PAL_BG | V4L2_STD_PAL_DK    | V4L2_STD_PAL_I    | \
+	V4L2_STD_PAL_M  | V4L2_STD_PAL_N     | V4L2_STD_PAL_Nc   | \
+	V4L2_STD_PAL_60 | V4L2_STD_SECAM_L   | V4L2_STD_SECAM_DK)
 
 #define	TW68_VID_INTS	(TW68_FFERR | TW68_PABORT | TW68_DMAPERR | \
 			 TW68_FDMIS | TW68_FFOF   | TW68_DMAPI)
@@ -181,7 +181,7 @@ struct tw68_board {
 #define card_has_radio(dev)	(NULL != tw68_boards[dev->board].radio.name)
 #define card_has_mpeg(dev)	(TW68_MPEG_UNUSED != \
 					tw68_boards[dev->board].mpeg)
-#define card_in(dev,n)		(tw68_boards[dev->board].inputs[n])
+#define card_in(dev, n)		(tw68_boards[dev->board].inputs[n])
 #define card(dev)		(tw68_boards[dev->board])
 
 /* ----------------------------------------------------------- */
@@ -245,7 +245,7 @@ struct tw68_fh {
 
 	/* video capture */
 	struct tw68_format	*fmt;
-	unsigned int		width,height;
+	unsigned int		width, height;
 	struct videobuf_queue	cap;	/* also used for overlay */
 
 	/* vbi capture */
@@ -278,7 +278,7 @@ struct tw68_dmasound {
 	unsigned int		dma_blk;
 	unsigned int		read_offset;
 	unsigned int		read_count;
-	void *				priv_data;
+	void 			*priv_data;
 	struct snd_pcm_substream	*substream;
 };
 
@@ -340,7 +340,7 @@ struct tw68_dev {
 	char			name[32];
 	int			nr;
 	struct pci_dev		*pci;
-	unsigned char		pci_rev,pci_lat;
+	unsigned char		pci_rev, pci_lat;
 	u32			__iomem *lmmio;
 	u8			__iomem *bmmio;
 	u32			pci_irqmask;
@@ -360,8 +360,6 @@ struct tw68_dev {
 	struct i2c_adapter	i2c_adap;
 	struct i2c_client	i2c_client;
 	u32			i2c_state;
-//	int			use_i2c_hw;
-//	int			i2c_rc;
 	u32			i2c_done;
 	wait_queue_head_t	i2c_queue;
 	unsigned char		eedata[256];
@@ -418,25 +416,25 @@ struct tw68_dev {
 
 /* ----------------------------------------------------------- */
 
-#define tw_readl(reg)		readl(dev->lmmio + ((reg)>>2))
+#define tw_readl(reg)		readl(dev->lmmio + ((reg) >> 2))
 #define	tw_readb(reg)		readb(dev->bmmio + (reg))
-#define tw_writel(reg,value)	writel((value), dev->lmmio + ((reg)>>2))
-#define	tw_writeb(reg,value)	writeb((value), dev->bmmio + (reg))
+#define tw_writel(reg, value)	writel((value), dev->lmmio + ((reg) >> 2))
+#define	tw_writeb(reg, value)	writeb((value), dev->bmmio + (reg))
 
-#define tw_andorl(reg,mask,value) \
+#define tw_andorl(reg, mask, value) \
 		writel((readl(dev->lmmio+((reg)>>2)) & ~(mask)) |\
 		((value) & (mask)), dev->lmmio+((reg)>>2))
-#define	tw_andorb(reg,mask,value) \
-		writeb((readb(dev->bmmio+(reg)) & ~(mask)) |\
+#define	tw_andorb(reg, mask, value) \
+		writeb((readb(dev->bmmio + (reg)) & ~(mask)) |\
 		((value) & (mask)), dev->bmmio+(reg))
-#define tw_setl(reg,bit)	tw_andorl((reg),(bit),(bit))
-#define	tw_setb(reg,bit)	tw_andorb((reg),(bit),(bit))
-#define	tw_clearl(reg,bit)	\
-		writel((readl(dev->lmmio+((reg)>>2)) & ~(bit)), \
-		dev->lmmio+((reg)>>2))
-#define	tw_clearb(reg,bit)	\
+#define tw_setl(reg, bit)	tw_andorl((reg), (bit), (bit))
+#define	tw_setb(reg, bit)	tw_andorb((reg), (bit), (bit))
+#define	tw_clearl(reg, bit)	\
+		writel((readl(dev->lmmio + ((reg) >> 2)) & ~(bit)), \
+		dev->lmmio + ((reg) >> 2))
+#define	tw_clearb(reg, bit)	\
 		writeb((readb(dev->bmmio+((reg)>>2)) & ~(bit)), \
-		dev->bmmio+((reg)>>2))
+		dev->bmmio + ((reg) >> 2))
 #define tw_call_all(dev, o, f, args...) do {				\
 	if (dev->gate_ctrl)						\
 		dev->gate_ctrl(dev, 1);					\

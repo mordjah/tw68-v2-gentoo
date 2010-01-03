@@ -1,7 +1,7 @@
 /*
  *  tw68_risc.c
  *  Part of the device driver for Techwell 68xx based cards
- *  
+ *
  *  Much of this code is derived from the cx88 and sa7134 drivers, which
  *  were in turn derived from the bt87x driver.  The original work was by
  *  Gerd Knorr; more recently the code was enhanced by Mauro Carvalho Chehab,
@@ -42,13 +42,13 @@
  *  @lpi	lines per IRQ, or 0 to not generate irqs
  *		Note: IRQ to be generated _after_ lpi lines are transferred
  */
-static __le32* tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
+static __le32 *tw68_risc_field(__le32 *rp, struct scatterlist *sglist,
 			    unsigned int offset, u32 sync_line,
 			    unsigned int bpl, unsigned int padding,
 			    unsigned int lines, unsigned int lpi)
 {
 	struct scatterlist *sg;
-	unsigned int line,todo,done;
+	unsigned int line, todo, done;
 
 	/* sync instruction */
 	if (sync_line != NO_SYNC_LINE) {
@@ -162,7 +162,8 @@ int tw68_risc_buffer(struct pci_dev *pci,
 	 */
 	instructions  = fields * (1 + (((bpl + padding) * lines) /
 			 PAGE_SIZE) + lines) + 2;
-	if ((rc = btcx_riscmem_alloc(pci,risc,instructions*8)) < 0)
+	btcx_riscmem_alloc(pci, risc, instructions * 8);
+	if (rc < 0)
 		return rc;
 
 	/* write risc instructions */
@@ -177,7 +178,7 @@ int tw68_risc_buffer(struct pci_dev *pci,
 	/* save pointer to jmp instruction address */
 	risc->jmp = rp;
 	/* assure risc buffer hasn't overflowed */
-	BUG_ON((risc->jmp - risc->cpu + 2) * sizeof (*risc->cpu) > risc->size);
+	BUG_ON((risc->jmp - risc->cpu + 2) * sizeof(*risc->cpu) > risc->size);
 	return 0;
 }
 
@@ -194,32 +195,29 @@ static void tw68_risc_decode(u32 risc, u32 addr)
 		u8 has_byte_info;
 		u8 has_addr;
 	} instr[8] = {
-		[ RISC_OP(RISC_SYNCO) ] = { "syncOdd", 0, 0, 0 },
-		[ RISC_OP(RISC_SYNCE) ] = { "syncEven", 0, 0, 0 },
-		[ RISC_OP(RISC_JUMP)  ] = { "jump", 0, 0, 1 },
-		[ RISC_OP(RISC_LINESTART) ] = { "lineStart", 1, 1, 1 },
-		[ RISC_OP(RISC_INLINE) ]    = { "inline", 1, 1, 1 },
+		[RISC_OP(RISC_SYNCO)]	  = {"syncOdd", 0, 0, 0},
+		[RISC_OP(RISC_SYNCE)]	  = {"syncEven", 0, 0, 0},
+		[RISC_OP(RISC_JUMP)]	  = {"jump", 0, 0, 1},
+		[RISC_OP(RISC_LINESTART)] = {"lineStart", 1, 1, 1},
+		[RISC_OP(RISC_INLINE)]	  = {"inline", 1, 1, 1},
 	};
 	u32 p;
 
 	p = RISC_OP(risc);
 	if (!(risc & 0x80000000) || !instr[p].name) {
-		printk("0x%08x [ INVALID ]\n", risc);
+		printk(KERN_DEBUG "0x%08x [ INVALID ]\n", risc);
 		return;
 	}
-	printk("0x%08x %-9s IRQ=%d",
+	printk(KERN_DEBUG "0x%08x %-9s IRQ=%d",
 		risc, instr[p].name, (risc >> 27) & 1);
-	if (instr[p].has_data_type) {
-		printk(" Type=%d", (risc >> 24) & 7);
-	}
-	if (instr[p].has_byte_info) {
-		printk(" Start=0x%03x Count=%03u",
+	if (instr[p].has_data_type)
+		printk(KERN_DEBUG " Type=%d", (risc >> 24) & 7);
+	if (instr[p].has_byte_info)
+		printk(KERN_DEBUG " Start=0x%03x Count=%03u",
 			(risc >> 12) & 0xfff, risc & 0xfff);
-	}
-	if (instr[p].has_addr) {
-		printk(" StartAddr=0x%08x", addr);
-	}
-	printk("\n");
+	if (instr[p].has_addr)
+		printk(KERN_DEBUG " StartAddr=0x%08x", addr);
+	printk(KERN_DEBUG "\n");
 }
 
 void tw68_risc_program_dump(struct tw68_core *core,
@@ -230,9 +228,8 @@ void tw68_risc_program_dump(struct tw68_core *core,
 	printk(KERN_DEBUG "%s: risc_program_dump: risc=%p, "
 			  "risc->cpu=0x%p, risc->jmp=0x%p\n",
 			  core->name, risc, risc->cpu, risc->jmp);
-	for (addr = risc->cpu; addr <=risc->jmp; addr += 2) {
+	for (addr = risc->cpu; addr <= risc->jmp; addr += 2)
 		tw68_risc_decode(*addr, *(addr+1));
-	}
 }
 EXPORT_SYMBOL_GPL(tw68_risc_program_dump);
 #endif
@@ -250,7 +247,8 @@ int tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc)
 	__le32 *rp;
 	int rc;
 
-	if ((rc = btcx_riscmem_alloc(pci, risc, 4*4)) < 0)
+	rc = btcx_riscmem_alloc(pci, risc, 4*4);
+	if (rc < 0)
 		return rc;
 
 	/* write risc inststructions */

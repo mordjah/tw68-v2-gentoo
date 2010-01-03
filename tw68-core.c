@@ -179,7 +179,6 @@ int tw68_buffer_requeue(struct tw68_dev *dev,
 			list_move_tail(&buf->vb.queue, &q->active);
 			q->start_dma(dev, q, buf);
 			buf->activate(dev, buf, NULL);
-			mod_timer(&q->timeout, jiffies + BUFFER_TIMEOUT);
 			dprintk(40, "%s: [%p/%d] first active\n",
 				__func__, buf, buf->vb.i);
 
@@ -308,6 +307,8 @@ void tw68_buffer_queue(struct tw68_dev *dev,
 /*
  * tw68_buffer_timeout
  *
+ * This routine is set as the video_q.timeout.function
+ *
  * Log the event, try to reset the h/w.
  * Flag the current buffer as failed, try to start again with next buff
  */
@@ -345,9 +346,11 @@ static int tw68_hw_enable1(struct tw68_dev *dev)
 }
 
 /*
- * Comments below on read and write ops lines reflect information appended by
- * Cavok during early evaluation.
- */ 
+ * The device is given a "soft reset". According to the specifications,
+ * after this "all register content remain unchanged", so we also write
+ * to all specified registers manually as well (mostly to manufacturer's
+ * specified reset values)
+ */
 static int tw68_hw_init1(struct tw68_dev *dev)
 {
 	/* Assure all interrupts are disabled */
@@ -356,49 +359,70 @@ static int tw68_hw_init1(struct tw68_dev *dev)
 	tw_writel(TW68_INTSTAT, 0xffffffff);	/* 01C */
 	/* Stop risc processor, set default buffer level */
 	tw_writel(TW68_DMAC, 0x1600);
-	tw_writeb(TW68_ACNTL, 0x80);	/* 218 soft reset */
+
+	tw_writeb(TW68_ACNTL, 0x80);	/* 218	soft reset */
 	msleep(100);
 
-	tw_writeb(TW68_INFORM, 0x40);	/* 208 mux0, 27mhz xtal */
-	tw_writeb(TW68_OPFORM, 0x04);	/* 20C analog line-lock */
-	tw_writeb(TW68_HSYNC, 0);	/* 210 color-killer high sens */
-	tw_writeb(TW68_ACNTL, 0x42);	/* 218 int vref #2, chroma adc off */
-	tw_writeb(TW68_CNTRL1, 0xcc);	/* 230 */
+	tw_writeb(TW68_INFORM, 0x40);	/* 208	mux0, 27mhz xtal */
+	tw_writeb(TW68_OPFORM, 0x04);	/* 20C	analog line-lock */
+	tw_writeb(TW68_HSYNC, 0);	/* 210	color-killer high sens */
+	tw_writeb(TW68_ACNTL, 0x42);	/* 218	int vref #2, chroma adc off */
+
+	tw_writeb(TW68_CROP_HI, 0x02);	/* 21C	Hactive m.s. bits */
+	tw_writeb(TW68_VDELAY_LO, 0x12);/* 220	Mfg specified reset value */
+	tw_writeb(TW68_VACTIVE_LO, 0xf0);
+	tw_writeb(TW68_HDELAY_LO, 0x0f);
+	tw_writeb(TW68_HACTIVE_LO, 0xd0);
+
+	tw_writeb(TW68_CNTRL1, 0xcd);	/* 230	Wide Chroma BPF B/W
+					 *	Secam reduction, Adap comb for
+					 *	NTSC, Op Mode 1 */
+
+	tw_writeb(TW68_VSCALE_LO, 0);	/* 234 */
+	tw_writeb(TW68_SCALE_HI, 0x11);	/* 238 */
+	tw_writeb(TW68_HSCALE_LO, 0);	/* 23c */
+	tw_writeb(TW68_BRIGHT, 0);	/* 240 */
+	tw_writeb(TW68_CONTRAST, 0x5c);	/* 244 */
+	tw_writeb(TW68_SHARPNESS, 0x51);/* 248 */
+	tw_writeb(TW68_SAT_U, 0x80);	/* 24C */
+	tw_writeb(TW68_SAT_V, 0x80);	/* 250 */
+	tw_writeb(TW68_HUE, 0x00);	/* 254 */
 
 	/* TODO - Check that none of these are set by control defaults */
-	tw_writeb(TW68_SHARP2, 0xc6);	/* 258  cavok - my specs say 0x53 */
-	tw_writeb(TW68_VSHARP, 0x84);	/* 25C  cavok - my specs say 0x80 */
-	tw_writeb(TW68_CORING, 0x44);	/* 260 */
-	tw_writeb(TW68_CNTRL2, 0x0a);	/* 268 Anti-alias filters enabled */
-					/*      cavok - my specs say 0x00 */
-	tw_writeb(TW68_SDT, 0x07);	/* 270 */
-	tw_writeb(TW68_SDTR, 0x7f);	/* 274 */
-	tw_writeb(TW68_RESERV2, 0x07);	/* 278 FIXME - why? */
-	tw_writeb(TW68_RESERV3, 0x7f);	/* 27C FIXME - why? */
-	tw_writeb(TW68_CLMPG, 0x50);	/* 280 */
-	tw_writeb(TW68_IAGC, 0x42);	/* 284  cavok - my specs say 0x22 */
-	tw_writeb(TW68_AGCGAIN, 0xf0);	/* 288 */
-	tw_writeb(TW68_PEAKWT, 0xd8);	/* 28C */
-	tw_writeb(TW68_CLMPL, 0xbc);	/* 290  cavok - my specs say 0x3C */
-	tw_writeb(TW68_SYNCT, 0xb8);	/* 294  cavok - my specs say 0x38 */
-	tw_writeb(TW68_MISSCNT, 0x44);	/* 298 */
-	tw_writeb(TW68_PCLAMP, 0x2a);	/* 29C  cavok - my specs say 0x28 */
+	tw_writeb(TW68_SHARP2, 0x53);	/* 258	Mfg specified reset val */
+	tw_writeb(TW68_VSHARP, 0x80);	/* 25C	Sharpness Coring val 8 */
+	tw_writeb(TW68_CORING, 0x44);	/* 260	CTI and Vert Peak coring */
+	tw_writeb(TW68_CNTRL2, 0x00);	/* 268	No power saving enabled */
+	tw_writeb(TW68_SDT, 0x07);	/* 270	Enable shadow reg, auto-det */
+	tw_writeb(TW68_SDTR, 0x7f);	/* 274	All stds recog, don't start */
+	tw_writeb(TW68_CLMPG, 0x50);	/* 280	Clamp end at 40 sys clocks */
+	tw_writeb(TW68_IAGC, 0x22);	/* 284	Mfg specified reset val */
+	tw_writeb(TW68_AGCGAIN, 0xf0);	/* 288	AGC gain when loop disabled */
+	tw_writeb(TW68_PEAKWT, 0xd8);	/* 28C	White peak threshold */
+	tw_writeb(TW68_CLMPL, 0x3c);	/* 290	Y channel clamp level */
+	tw_writeb(TW68_SYNCT, 0x38);	/* 294	Sync amplitude */
+	tw_writeb(TW68_MISSCNT, 0x44);	/* 298	Horiz sync, VCR detect sens */
+	tw_writeb(TW68_PCLAMP, 0x28);	/* 29C	Clamp pos from PLL sync */
 	tw_writeb(TW68_VCNTL1, 0);	/* 2A0 */
 	tw_writeb(TW68_VCNTL2, 0);	/* 2A4 */
-	tw_writeb(TW68_CKILL, 0x78);	/* 2A8  cavok - my specs say 0x68 */
-	tw_writeb(TW68_COMB, 0x44);	/* 2AC */
-	tw_writeb(TW68_LDLY, 0x30);	/* 2B0 */
-	tw_writeb(TW68_MISC1, 0x14);	/* 2B4 */
-	tw_writeb(TW68_LOOP, 0xa5);	/* 2B8 */
-	tw_writeb(TW68_MISC2, 0xe0);	/* 2BC */
+	tw_writeb(TW68_CKILL, 0x68);	/* 2A8	Mfg specified reset val */
+	tw_writeb(TW68_COMB, 0x44);	/* 2AC	Mfg specified reset val */
+	tw_writeb(TW68_LDLY, 0x30);	/* 2B0	Max positive luma delay */
+	tw_writeb(TW68_MISC1, 0x14);	/* 2B4	Mfg specified reset val */
+	tw_writeb(TW68_LOOP, 0xa5);	/* 2B8	Mfg specified reset val */
+	tw_writeb(TW68_MISC2, 0xe0);	/* 2BC	Enable colour killer */
 	tw_writeb(TW68_MVSN, 0);	/* 2C0 */
-	tw_writeb(TW68_CLMD, 0x05);	/* 2CC  cavok - my specs say 0x11 */
-	tw_writeb(TW68_IDCNTL, 0);	/* 2D0  cavok - my specs say a
-					 *      completely different way to
-					 *      use this reg */
+	tw_writeb(TW68_CLMD, 0x05);	/* 2CC	slice level auto, clamp med. */
+	tw_writeb(TW68_IDCNTL, 0);	/* 2D0	Writing zero to this register
+					 *	selects NTSC ID detection,
+					 *	but doesn't change the
+					 *	sensitivity (which has a reset
+					 *	value of 1E).  Since we are
+					 *	not doing auto-detection, it
+					 *	has no real effect */
 	tw_writeb(TW68_CLCNTL1, 0);	/* 2D4 */
 	tw_writel(TW68_VBIC, 0x03);	/* 010 */
-	tw_writel(TW68_CAP_CTL, 0x43);	/* 040  cavok - my specs say 0x03 */
+	tw_writel(TW68_CAP_CTL, 0x03);	/* 040	Enable both even & odd flds */
 	tw_writel(TW68_DMAC, 0x2000);	/* patch set had 0x2080 */
 	tw_writel(TW68_TESTREG, 0);	/* 02C */
 
@@ -521,7 +545,7 @@ static struct video_device *vdev_init(struct tw68_dev *dev,
 	vfd->minor   = -1;
 	vfd->parent  = &dev->pci->dev;
 	vfd->release = video_device_release;
-//	vfd->debug   = tw_video_debug;
+	/* vfd->debug   = tw_video_debug; */
 	snprintf(vfd->name, sizeof(vfd->name), "%s %s (%s)",
 		 dev->name, type, tw68_boards[dev->board].name);
 	return vfd;
@@ -820,7 +844,6 @@ static void __devexit tw68_finidev(struct pci_dev *pci_dev)
 	struct tw68_mpeg_ops *mops;
 
 	/* Release DMA sound modules if present */
-printk("%s: finishing up\n", __func__);
 	if (tw68_dmasound_exit && dev->dmasound.priv_data)
 		tw68_dmasound_exit(dev);
 

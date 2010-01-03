@@ -1,7 +1,7 @@
 /*
  *  tw68_ts.c
  *  Part of the device driver for Techwell 68xx based cards
- *  
+ *
  *  Much of this code is derived from the cx88 and sa7134 drivers, which
  *  were in turn derived from the bt87x driver.  The original work was by
  *  Gerd Knorr; more recently the code was enhanced by Mauro Carvalho Chehab,

@@ -151,11 +151,6 @@
 #define	TW68_CLMD		0x2CC
 #define	TW68_IDCNTL		0x2D0
 #define	TW68_CLCNTL1		0x2D4
-//#define	TW68_SLICELEVEL		0x2D8
-//#define	TW68_WSS1		0x2DC
-//#define	TW68_WSS2		0x2E0
-//#define	TW68_CSTATUS3		0x2E4
-//#define	TW68_HFREF		0x2E8
 
 /* Audio */
 #define	TW68_ACKI1		0x300

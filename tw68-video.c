@@ -35,13 +35,6 @@
  *  	at the moment.
  */
 
-/**
- * TODO:
- *
- * 	reqbufs should check for a count of zero, and if so should
- * 	follow the chain of queued buffers and call videobuf_mmap_free
- * 	for each of them.
- */
 #include "tw68.h"
 #include "tw68-reg.h"
 #include <media/v4l2-common.h>
@@ -51,7 +44,6 @@ unsigned int video_debug;
 
 static unsigned int gbuffers	= 8;
 static unsigned int noninterlaced; /* 0 */
-/* TODO - why 576? */
 static unsigned int gbufsz	= 768*576*4;
 static unsigned int gbufsz_max	= 768*576*4;
 static char secam[]		= "--";
@@ -68,15 +60,14 @@ MODULE_PARM_DESC(secam, "force SECAM variant, either DK,L or Lc");
 /*
  * dprintk statements within the code use a 'level' argument.  For
  * our purposes, we use the following levels:
- * 	 1	Unexpected events
- * 	 2	Uncommon events
- * 	10	Routines currently under testing
- * 	40	debug data for frequently-called routines
- * 		(e.g. buffer management)
- * 	50	debug data for heavily-used routines
- * 	90	low-level debugging, e.g. log entry to most routines
  */
-#define dprintk(level, fmt, arg...)     if (video_debug >= level) \
+#define	DBG_UNEXPECTED	(1 << 0)
+#define	DBG_UNUSUAL	(1 << 1)
+#define	DBG_TESTING	(1 << 2)
+#define	DBG_BUFF	(1 << 3)
+#define	DBG_FLOW	(1 << 15)
+
+#define dprintk(level, fmt, arg...)     if (video_debug & level) \
 	printk(KERN_DEBUG "%s/0: " fmt, dev->name , ## arg)
 #define iprintk(level, fmt, arg...)	if (irq_debug >= level) \
 	printk(KERN_DEBUG "%s/0: " fmt, dev->name , ## arg)
@@ -146,7 +137,7 @@ static struct tw68_format formats[] = {
 #define FORMATS ARRAY_SIZE(formats)
 
 #define NORM_625_50			\
-		.h_delay	= 1,	\
+		.h_delay	= 3,	\
 		.h_start	= 0,	\
 		.h_stop		= 719,	\
 		.v_delay	= 24,	\
@@ -157,13 +148,13 @@ static struct tw68_format formats[] = {
 		.vbi_v_start_1	= 319
 
 #define NORM_525_60			\
-		.h_delay	= 17,	\
+		.h_delay	= 8,	\
 		.h_start	= 0,	\
-		.h_stop		= 703,	\
-		.v_delay	= 26,	\
+		.h_stop		= 719,	\
+		.v_delay	= 22,	\
 		.vbi_v_start_0	= 10,	\
 		.vbi_v_stop_0	= 21,	\
-		.video_v_start	= 23,	\
+		.video_v_start	= 22,	\
 		.video_v_stop	= 262,	\
 		.vbi_v_start_1	= 273
 
@@ -408,7 +399,20 @@ static const struct v4l2_queryctrl video_ctrls[]		= {
 		.step		= 1,
 		.default_value	= 0,
 		.type		= V4L2_CTRL_TYPE_INTEGER,
-#if 0
+	}, {
+		.id		= V4L2_CID_COLOR_KILLER,
+		.name		= "Color Killer",
+		.minimum	= 0,
+		.maximum	= 1,
+		.default_value	= 1,
+		.type		= V4L2_CTRL_TYPE_BOOLEAN,
+	}, {
+		.id		= V4L2_CID_CHROMA_AGC,
+		.name		= "Chroma AGC",
+		.minimum	= 0,
+		.maximum	= 1,
+		.default_value	= 1,
+		.type		= V4L2_CTRL_TYPE_BOOLEAN,
 	},
 	/* --- audio --- */
 	{
@@ -425,42 +429,14 @@ static const struct v4l2_queryctrl video_ctrls[]		= {
 		.step		= 1,
 		.default_value	= 0,
 		.type		= V4L2_CTRL_TYPE_INTEGER,
-	},
-	/* --- private --- */
-	{
-		.id		= V4L2_CID_PRIVATE_INVERT,
-		.name		= "Invert",
-		.minimum	= 0,
-		.maximum	= 1,
-		.type		= V4L2_CTRL_TYPE_BOOLEAN,
-	}, {
-		.id		= V4L2_CID_PRIVATE_Y_ODD,
-		.name		= "y offset odd field",
-		.minimum	= 0,
-		.maximum	= 128,
-		.step		= 1,
-		.default_value	= 0,
-		.type		= V4L2_CTRL_TYPE_INTEGER,
-	}, {
-		.id		= V4L2_CID_PRIVATE_Y_EVEN,
-		.name		= "y offset even field",
-		.minimum	= 0,
-		.maximum	= 128,
-		.step		= 1,
-		.default_value	= 0,
-		.type		= V4L2_CTRL_TYPE_INTEGER,
-	}, {
-		.id		= V4L2_CID_PRIVATE_AUTOMUTE,
-		.name		= "automute",
-		.minimum	= 0,
-		.maximum	= 1,
-		.default_value	= 1,
-		.type		= V4L2_CTRL_TYPE_BOOLEAN,
-#endif
 	}
 };
 static const unsigned int CTRLS = ARRAY_SIZE(video_ctrls);
 
+/*
+ * Routine to lookup a control by its ID, and return a pointer
+ * to the entry in the video_ctrls array for that control.
+ */
 static const struct v4l2_queryctrl *ctrl_by_id(unsigned int id)
 {
 	unsigned int i;
@@ -502,7 +478,7 @@ static int res_get(struct tw68_fh *fh, unsigned int bit)
 	/* it's free, grab it */
 	fh->resources  |= bit;
 	dev->resources |= bit;
-	dprintk(1, "%s: %d\n", __func__, bit);
+	dprintk(DBG_FLOW, "%s: %d\n", __func__, bit);
 	mutex_unlock(&dev->lock);
 	return 1;
 }
@@ -527,7 +503,7 @@ static void res_free(struct tw68_fh *fh,
 	mutex_lock(&fh->dev->lock);
 	fh->resources  &= ~bits;
 	fh->dev->resources &= ~bits;
-	dprintk(40, "%s: %d\n", __func__, bits);
+	dprintk(DBG_FLOW, "%s: %d\n", __func__, bits);
 	mutex_unlock(&fh->dev->lock);
 }
 
@@ -538,7 +514,7 @@ static void res_free(struct tw68_fh *fh,
  */
 static void set_tvnorm(struct tw68_dev *dev, struct tw68_tvnorm *norm)
 {
-	dprintk(90, "%s: %s\n", __func__, norm->name);
+	dprintk(DBG_FLOW, "%s: %s\n", __func__, norm->name);
 	dev->tvnorm = norm;
 
 	/* setup cropping */
@@ -547,14 +523,11 @@ static void set_tvnorm(struct tw68_dev *dev, struct tw68_tvnorm *norm)
 	dev->crop_bounds.width   = norm->h_stop - norm->h_start + 1;
 	dev->crop_defrect.width  = norm->h_stop - norm->h_start + 1;
 
-//	dev->crop_bounds.top     = (norm->vbi_v_stop_0 + 1 ) * 2;
 	dev->crop_bounds.top     = norm->video_v_start;
-//	dev->crop_defrect.top    = norm->video_v_start * 2;
 	dev->crop_defrect.top    = norm->video_v_start;
 	dev->crop_bounds.height  = (((norm->id & V4L2_STD_525_60) ?
 				    524 : 624)) / 2 - dev->crop_bounds.top;
 	dev->crop_defrect.height = (norm->video_v_stop -
-//				    norm->video_v_start + 1)*2;
 				    norm->video_v_start + 1);
 
 	dev->crop_current = dev->crop_defrect;
@@ -564,11 +537,10 @@ static void set_tvnorm(struct tw68_dev *dev, struct tw68_tvnorm *norm)
 
 static void video_mux(struct tw68_dev *dev, int input)
 {
-	dprintk(90, "%s: input = %d [%s]\n", __func__, input,
+	dprintk(DBG_FLOW, "%s: input = %d [%s]\n", __func__, input,
 		card_in(dev, input).name);
 	tw_andorb(TW68_INFORM, 0x03 << 2, input << 2);
 	dev->ctl_input = input;
-	set_tvnorm(dev, dev->tvnorm);
 	tw68_tvaudio_setinput(dev, &card_in(dev, input));
 }
 
@@ -613,11 +585,11 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 	if (V4L2_FIELD_HAS_BOTH(field))	/* if field is interlaced */
 		height /= 2;		/* we must set for 1-frame */
 
-	dprintk(10, "%s: height=%d, width=%d, both=%d\n  Crop rect: "
-		    "top=%d, left=%d, width=%d, height=%d\n"
+	dprintk(DBG_TESTING, "%s: width=%d, height=%d, both=%d\n  Crop rect: "
+		    "top=%d, left=%d, width=%d height=%d\n"
 		    "  tvnorm h_delay=%d, h_start=%d, h_stop=%d, "
 		    "v_delay=%d, v_start=%d, v_stop=%d\n" , __func__,
-		height, width, V4L2_FIELD_HAS_BOTH(field),
+		width, height, V4L2_FIELD_HAS_BOTH(field),
 		dev->crop_bounds.top, dev->crop_bounds.left,
 		dev->crop_bounds.width, dev->crop_bounds.height,
 		dev->tvnorm->h_delay, dev->tvnorm->h_start, dev->tvnorm->h_stop,
@@ -627,28 +599,28 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 	hdelay = dev->tvnorm->h_delay + dev->crop_bounds.left;
 	hactive = dev->crop_bounds.width;
 
-	hscale = (hactive * 256) / (width );
+	hscale = (hactive * 256) / (width);
 
 	vdelay = dev->tvnorm->v_delay + dev->crop_bounds.top -
 		 dev->crop_defrect.top;
 	vactive = dev->crop_bounds.height;
 	vscale = (vactive * 256) / height;
 
-	dprintk(10, "%s: %dx%d [%s%s,%s]\n", __func__,
+	dprintk(DBG_TESTING, "%s: %dx%d [%s%s,%s]\n", __func__,
 		width, height,
 		V4L2_FIELD_HAS_TOP(field)    ? "T" : "",
 		V4L2_FIELD_HAS_BOTTOM(field) ? "B" : "",
 		v4l2_norm_to_name(dev->tvnorm->id));
-	dprintk(10, "%s: hactive=%d, hdelay=%d, hscale=%d; "
-		   "vactive=%d, vdelay=%d, vscale=%d\n", __func__,
-		   hactive, hdelay, hscale, vactive, vdelay, vscale);
+	dprintk(DBG_TESTING, "%s: hactive=%d, hdelay=%d, hscale=%d; "
+		"vactive=%d, vdelay=%d, vscale=%d\n", __func__,
+		hactive, hdelay, hscale, vactive, vdelay, vscale);
 
 	comb =	((vdelay & 0x300)  >> 2) |
 		((vactive & 0x300) >> 4) |
 		((hdelay & 0x300)  >> 6) |
 		((hactive & 0x300) >> 8);
-	dprintk(10, "%s: setting CROP_HI=%02x, VDELAY_LO=%02x, VACTIVE_LO="
-		"%02x, HDELAY_LO=%02x, HACTIVE_LO=%02x\n",
+	dprintk(DBG_TESTING, "%s: setting CROP_HI=%02x, VDELAY_LO=%02x, "
+		"VACTIVE_LO=%02x, HDELAY_LO=%02x, HACTIVE_LO=%02x\n",
 		__func__, comb, vdelay, vactive, hdelay, hactive);
 	tw_writeb(TW68_CROP_HI, comb);
 	tw_writeb(TW68_VDELAY_LO, vdelay & 0xff);
@@ -657,7 +629,7 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 	tw_writeb(TW68_HACTIVE_LO, hactive & 0xff);
 
 	comb = ((vscale & 0xf00) >> 4) | ((hscale & 0xf00) >> 8);
-	dprintk(10, "%s: setting SCALE_HI=%02x, VSCALE_LO=%02x, "
+	dprintk(DBG_TESTING, "%s: setting SCALE_HI=%02x, VSCALE_LO=%02x, "
 		"HSCALE_LO=%02x\n", __func__, comb, vscale, hscale);
 	tw_writeb(TW68_SCALE_HI, comb);
 	tw_writeb(TW68_VSCALE_LO, vscale);
@@ -671,7 +643,7 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 static int tw68_video_start_dma(struct tw68_dev *dev, struct tw68_dmaqueue *q,
 				struct tw68_buf *buf) {
 
-	dprintk(40, "%s: Starting risc program\n", __func__);
+	dprintk(DBG_BUFF, "%s: Starting risc program\n", __func__);
 	/* TODO - set scale registers */
 	tw68_set_scale(dev, buf->vb.width, buf->vb.height, buf->vb.field);
 	tw_writel(TW68_DMAP_SA, cpu_to_le32(buf->risc.dma));
@@ -720,11 +692,10 @@ buffer_setup(struct videobuf_queue *q, unsigned int *count,
 	return 0;
 }
 
-static int buffer_activate(struct tw68_dev *dev,
-			   struct tw68_buf *buf,
+static int buffer_activate(struct tw68_dev *dev, struct tw68_buf *buf,
 			   struct tw68_buf *next)
 {
-	dprintk(50, "%s: dev=%p, buf=%p, next=%p\n",
+	dprintk(DBG_BUFF, "%s: dev=%p, buf=%p, next=%p\n",
 		__func__, dev, buf, next);
 	buf->vb.state = VIDEOBUF_ACTIVE;
 	/* TODO - need to assure scaling/cropping are set correctly */
@@ -757,16 +728,14 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 	BUG_ON(NULL == fh->fmt);
 	maxw = dev->tvnorm->h_stop - dev->tvnorm->h_start + 1;
 	maxh = 2*(dev->tvnorm->video_v_stop - dev->tvnorm->video_v_start + 1);
-//	if (V4L2_FIELD_HAS_BOTH(field))
-//		maxh *= 2;
 	if (fh->width  < 48 || fh->width  > maxw || fh->height > maxh
 		|| fh->height < 16) {
-		dprintk(1, "%s: invalid dimensions - fh->width=%d, "
-			   "fh->height=%d, maxw=%d, maxh=%d\n",
-			   __func__, fh->width, fh->height, maxw, maxh);
+		dprintk(DBG_UNEXPECTED, "%s: invalid dimensions - "
+			"fh->width=%d, fh->height=%d, maxw=%d, maxh=%d\n",
+			__func__, fh->width, fh->height, maxw, maxh);
 		return -EINVAL;
 	}
-	buf->vb.size = (fh->width * fh->height * fh->fmt->depth) >> 3;
+	buf->vb.size = (fh->width * fh->height * (fh->fmt->depth)) >> 3;
 	if (0 != buf->vb.baddr  &&  buf->vb.bsize < buf->vb.size)
 		return -EINVAL;
 
@@ -774,7 +743,7 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 	    buf->vb.width  != fh->width  ||
 	    buf->vb.height != fh->height ||
 	    buf->vb.field  != field) {
-		dprintk(40, "%s: buf - fmt=%p, width=%3d, height=%3d, "
+		dprintk(DBG_BUFF, "%s: buf - fmt=%p, width=%3d, height=%3d, "
 			"field=%d\n%s: fh  - fmt=%p, width=%3d, height=%3d, "
 			"field=%d\n", __func__, buf->fmt, buf->vb.width,
 			buf->vb.height, buf->vb.field, __func__, fh->fmt,
@@ -783,20 +752,23 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 		buf->vb.width  = fh->width;
 		buf->vb.height = fh->height;
 		buf->vb.field  = field;
-		init_buffer = 1;
+		init_buffer = 1;	/* force risc code re-generation */
 	}
 
 	if (VIDEOBUF_NEEDS_INIT == buf->vb.state) {
-		init_buffer = 1;
 		rc = videobuf_iolock(q, &buf->vb, NULL);
 		if (0 != rc)
 			goto fail;
+		init_buffer = 1;	/* force risc code re-generation */
 	}
-	dprintk(50, "%s: q=%p, vb=%p, init_buffer=%d\n",
+	dprintk(DBG_BUFF, "%s: q=%p, vb=%p, init_buffer=%d\n",
 		__func__, q, vb, init_buffer);
 
 	if (init_buffer) {
-		buf->bpl = buf->vb.width * buf->fmt->depth >> 3;
+		buf->bpl = buf->vb.width * (buf->fmt->depth) >> 3;
+		dprintk(DBG_TESTING, "%s: Generating new risc code "
+			"[%dx%dx%d](%d)\n", __func__, buf->vb.width,
+			buf->vb.height, buf->fmt->depth, buf->bpl);
 		switch (buf->vb.field) {
 		case V4L2_FIELD_TOP:
 			tw68_risc_buffer(dev->pci, &buf->risc,
@@ -837,7 +809,7 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 			BUG();
 		}
 	}
-	dprintk(50, "%s: [%p/%d] - %dx%d %dbpp \"%s\" - dma=0x%08lx\n",
+	dprintk(DBG_BUFF, "%s: [%p/%d] - %dx%d %dbpp \"%s\" - dma=0x%08lx\n",
 		__func__, buf, buf->vb.i, fh->width, fh->height,
 		fh->fmt->depth, fh->fmt->name, (unsigned long)buf->risc.dma);
 
@@ -891,7 +863,7 @@ static int tw68_g_ctrl_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 {
 	const struct v4l2_queryctrl *ctrl;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	ctrl = ctrl_by_id(c->id);
 	if (NULL == ctrl)
 		return -EINVAL;
@@ -908,6 +880,12 @@ static int tw68_g_ctrl_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 	case V4L2_CID_SATURATION:
 		c->value = tw_readb(TW68_SAT_U);
 		break;
+	case V4L2_CID_COLOR_KILLER:
+		c->value = 0 != (tw_readb(TW68_MISC2) & 0xe0);
+		break;
+	case V4L2_CID_CHROMA_AGC:
+		c->value = 0 != (tw_readb(TW68_LOOP) & 0x30);
+		break;
 	case V4L2_CID_AUDIO_MUTE:
 		/*hack to suppresss tvtime complaint */
 		c->value = 0;
@@ -916,28 +894,12 @@ static int tw68_g_ctrl_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 	case V4L2_CID_AUDIO_VOLUME:
 		c->value = dev->ctl_volume;
 		break;
-	case V4L2_CID_PRIVATE_INVERT:
-		c->value = dev->ctl_invert;
-		break;
-	case V4L2_CID_HFLIP:
-		c->value = dev->ctl_mirror;
-		break;
-	case V4L2_CID_PRIVATE_Y_EVEN:
-		c->value = dev->ctl_y_even;
-		break;
-	case V4L2_CID_PRIVATE_Y_ODD:
-		c->value = dev->ctl_y_odd;
-		break;
-	case V4L2_CID_PRIVATE_AUTOMUTE:
-		c->value = dev->ctl_automute;
-		break;
 #endif
 	default:
 		return -EINVAL;
 	}
 	return 0;
 }
-EXPORT_SYMBOL_GPL(tw68_g_ctrl_internal);
 
 static int tw68_g_ctrl(struct file *file, void *priv, struct v4l2_control *c)
 {
@@ -950,7 +912,7 @@ static int tw68_s_ctrl_value(struct tw68_dev *dev, __u32 id, int val)
 {
 	int err = 0;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	switch (id) {
 	case V4L2_CID_BRIGHTNESS:
 		tw_writeb(TW68_BRIGHT, val);
@@ -965,6 +927,22 @@ static int tw68_s_ctrl_value(struct tw68_dev *dev, __u32 id, int val)
 		tw_writeb(TW68_SAT_U, val);
 		tw_writeb(TW68_SAT_V, val);
 		break;
+	case V4L2_CID_COLOR_KILLER:
+		dprintk(DBG_TESTING, "%s: reg is 0x%02x, val is %d\n",
+			__func__, tw_readb(TW68_MISC2), val);
+		if (val)
+			tw_andorb(TW68_MISC2, 0xe0, 0xe0);
+		else
+			tw_andorb(TW68_MISC2, 0xe0, 0x00);
+		dprintk(DBG_TESTING, "%s: reg is now 0x%02x\n",
+			__func__, tw_readb(TW68_MISC2));
+		break;
+	case V4L2_CID_CHROMA_AGC:
+		if (val)
+			tw_andorb(TW68_LOOP, 0x30, 0x20);
+		else
+			tw_andorb(TW68_LOOP, 0x30, 0x00);
+		break;
 	case V4L2_CID_AUDIO_MUTE:
 		/* hack to suppress tvtime complaint */
 		break;
@@ -973,23 +951,8 @@ static int tw68_s_ctrl_value(struct tw68_dev *dev, __u32 id, int val)
 		dev->ctl_volume = val;
 		tw68_tvaudio_setvolume(dev, dev->ctl_volume);
 		break;
-	case V4L2_CID_PRIVATE_INVERT:
-		dev->ctl_invert = val;
-		tw_writeb(SAA7134_DEC_LUMA_CONTRAST,
-			   dev->ctl_invert ? -dev->ctl_contrast :
-					dev->ctl_contrast);
-		tw_writeb(SAA7134_DEC_CHROMA_SATURATION,
-			   dev->ctl_invert ? -dev->ctl_saturation :
-					dev->ctl_saturation);
-		break;
 	case V4L2_CID_HFLIP:
 		dev->ctl_mirror = val;
-		break;
-	case V4L2_CID_PRIVATE_Y_EVEN:
-		dev->ctl_y_even = val;
-		break;
-	case V4L2_CID_PRIVATE_Y_ODD:
-		dev->ctl_y_odd = val;
 		break;
 	case V4L2_CID_PRIVATE_AUTOMUTE:
 	{
@@ -1022,7 +985,7 @@ static int tw68_s_ctrl_internal(struct tw68_dev *dev,  struct tw68_fh *fh,
 	const struct v4l2_queryctrl *ctrl;
 	int err;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (fh) {
 		err = v4l2_prio_check(&dev->prio, &fh->prio);
 		if (0 != err)
@@ -1037,7 +1000,8 @@ static int tw68_s_ctrl_internal(struct tw68_dev *dev,  struct tw68_fh *fh,
 		goto error;
 	}
 
-	dprintk(40, "%s: name=%s val=%d\n", __func__, ctrl->name, c->value);
+	dprintk(DBG_BUFF, "%s: name=%s val=%d\n", __func__,
+		ctrl->name, c->value);
 	switch (ctrl->type) {
 	case V4L2_CTRL_TYPE_BOOLEAN:
 	case V4L2_CTRL_TYPE_MENU:
@@ -1125,7 +1089,7 @@ static int video_open(struct file *file)
 found:
 	mutex_unlock(&tw68_devlist_lock);
 
-	dprintk(40, "%s: minor=%d radio=%d type=%s\n", __func__, minor,
+	dprintk(DBG_FLOW, "%s: minor=%d radio=%d type=%s\n", __func__, minor,
 		radio, v4l2_type_names[type]);
 
 	/* allocate + initialize per filehandle data */
@@ -1316,13 +1280,13 @@ static int tw68_g_fmt_vid_cap(struct file *file, void *priv,
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	f->fmt.pix.width        = fh->width;
 	f->fmt.pix.height       = fh->height;
 	f->fmt.pix.field        = fh->cap.field;
 	f->fmt.pix.pixelformat  = fh->fmt->fourcc;
 	f->fmt.pix.bytesperline =
-		(f->fmt.pix.width * fh->fmt->depth) >> 3;
+		(f->fmt.pix.width * (fh->fmt->depth)) >> 3;
 	f->fmt.pix.sizeimage =
 		f->fmt.pix.height * f->fmt.pix.bytesperline;
 	f->fmt.pix.colorspace	= V4L2_COLORSPACE_SMPTE170M;
@@ -1338,7 +1302,7 @@ static int tw68_try_fmt_vid_cap(struct file *file, void *priv,
 	enum v4l2_field field;
 	unsigned int maxw, maxh;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	fmt = format_by_fourcc(f->fmt.pix.pixelformat);
 	if (NULL == fmt)
 		return -EINVAL;
@@ -1374,7 +1338,7 @@ static int tw68_try_fmt_vid_cap(struct file *file, void *priv,
 		f->fmt.pix.height = maxh;
 	f->fmt.pix.width &= ~0x03;
 	f->fmt.pix.bytesperline =
-		(f->fmt.pix.width * fmt->depth) >> 3;
+		(f->fmt.pix.width * (fmt->depth)) >> 3;
 	f->fmt.pix.sizeimage =
 		f->fmt.pix.height * f->fmt.pix.bytesperline;
 
@@ -1394,7 +1358,7 @@ static int tw68_s_fmt_vid_cap(struct file *file, void *priv,
 	struct tw68_dev *dev = fh->dev;
 	int err;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	err = tw68_try_fmt_vid_cap(file, priv, f);
 	if (0 != err)
 		return err;
@@ -1416,13 +1380,16 @@ static int tw68_queryctrl(struct file *file, void *priv,
 			  struct v4l2_queryctrl *c)
 {
 	const struct v4l2_queryctrl *ctrl;
+	struct tw68_fh *fh = priv;
+	struct tw68_dev *dev = fh->dev;
 
-	if ((c->id <  V4L2_CID_BASE ||
-	     c->id >= V4L2_CID_LASTP1))
+	dprintk(DBG_FLOW, "%s\n", __func__);
+	if ((c->id <  V4L2_CID_BASE || c->id >= V4L2_CID_LASTP1)
 #if 0
-	    (c->id <  V4L2_CID_PRIVATE_BASE ||
-	     c->id >= V4L2_CID_PRIVATE_LASTP1))
+	     && (c->id <  V4L2_CID_PRIVATE_BASE ||
+	     c->id >= V4L2_CID_PRIVATE_LASTP1)
 #endif
+	)
 		return -EINVAL;
 	ctrl = ctrl_by_id(c->id);
 	if (NULL == ctrl)
@@ -1438,7 +1405,7 @@ static int tw68_enum_input(struct file *file, void *priv,
 	struct tw68_dev *dev = fh->dev;
 	unsigned int n;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	n = i->index;
 	if (n >= TW68_INPUT_MAX)
 		return -EINVAL;
@@ -1475,7 +1442,7 @@ static int tw68_g_input(struct file *file, void *priv, unsigned int *i)
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	*i = dev->ctl_input;
 	return 0;
 }
@@ -1486,7 +1453,7 @@ static int tw68_s_input(struct file *file, void *priv, unsigned int i)
 	struct tw68_dev *dev = fh->dev;
 	int err;
 
-	dprintk(10,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	err = v4l2_prio_check(&dev->prio, &fh->prio);
 	if (0 != err)
 		return err;
@@ -1509,7 +1476,7 @@ static int tw68_querycap(struct file *file, void  *priv,
 
 	unsigned int tuner_type = dev->tuner_type;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	strcpy(cap->driver, "tw68");
 	strlcpy(cap->card, tw68_boards[dev->board].name,
 		sizeof(cap->card));
@@ -1535,7 +1502,7 @@ static int tw68_s_std_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 	v4l2_std_id fixup;
 	int err;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (fh) {
 		err = v4l2_prio_check(&dev->prio, &fh->prio);
 		if (0 != err)
@@ -1578,7 +1545,7 @@ static int tw68_s_std_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 
 	*id = tvnorms[i].id;
 	mutex_lock(&dev->lock);
-	set_tvnorm(dev, &tvnorms[i]);
+	set_tvnorm(dev, &tvnorms[i]);	/* do the actual setting */
 	tw68_tvaudio_do_scan(dev);
 	mutex_unlock(&dev->lock);
 	return 0;
@@ -1589,7 +1556,7 @@ static int tw68_s_std(struct file *file, void *priv, v4l2_std_id *id)
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	return tw68_s_std_internal(fh->dev, fh, id);
 }
 
@@ -1598,12 +1565,11 @@ static int tw68_g_std(struct file *file, void *priv, v4l2_std_id *id)
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	*id = dev->tvnorm->id;
 	return 0;
 }
 
-#if 0
 static int tw68_g_tuner(struct file *file, void *priv,
 					struct v4l2_tuner *t)
 {
@@ -1611,6 +1577,8 @@ static int tw68_g_tuner(struct file *file, void *priv,
 	struct tw68_dev *dev = fh->dev;
 	int n;
 
+	if (unlikely(UNSET == dev->tuner_type))
+		return -EINVAL;
 	if (0 != t->index)
 		return -EINVAL;
 	memset(t, 0, sizeof(*t));
@@ -1619,6 +1587,7 @@ static int tw68_g_tuner(struct file *file, void *priv,
 			break;
 	if (n == TW68_INPUT_MAX)
 		return -EINVAL;
+#if 0
 	if (NULL != card_in(dev, n).name) {
 		strcpy(t->name, "Television");
 		t->type = V4L2_TUNER_ANALOG_TV;
@@ -1630,7 +1599,6 @@ static int tw68_g_tuner(struct file *file, void *priv,
 		t->rxsubchans = tw68_tvaudio_getstereo(dev);
 		t->audmode = tw68_tvaudio_rx2mode(t->rxsubchans);
 	}
-#if 0
 	if (0 != (saa_readb(TW68_STATUS_VIDEO1) & 0x03))
 		t->signal = 0xffff;
 #endif
@@ -1642,12 +1610,16 @@ static int tw68_s_tuner(struct file *file, void *priv,
 {
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;
-	int rx, mode, err;
+	int err;
+#if 0
+	int rx, mode
+#endif
 
 	err = v4l2_prio_check(&dev->prio, &fh->prio);
 	if (0 != err)
 		return err;
 
+#if 0
 	mode = dev->thread.mode;
 	if (UNSET == mode) {
 		rx   = tw68_tvaudio_getstereo(dev);
@@ -1655,7 +1627,7 @@ static int tw68_s_tuner(struct file *file, void *priv,
 	}
 	if (mode != t->audmode)
 		dev->thread.mode = t->audmode;
-
+#endif
 	return 0;
 }
 
@@ -1663,8 +1635,10 @@ static int tw68_g_frequency(struct file *file, void *priv,
 					struct v4l2_frequency *f)
 {
 	struct tw68_fh *fh = priv;
-/*	struct tw68_dev *dev = fh->dev; */
+	struct tw68_dev *dev = fh->dev;
 
+	if (unlikely(dev->tuner_type))
+		return -EINVAL;
 	f->type = fh->radio ? V4L2_TUNER_RADIO : V4L2_TUNER_ANALOG_TV;
 /*	f->frequency = dev->ctl_freq; */
 
@@ -1678,6 +1652,8 @@ static int tw68_s_frequency(struct file *file, void *priv,
 	struct tw68_dev *dev = fh->dev;
 	int err;
 
+	if (unlikely(UNSET == dev->tuner_type))
+		return -EINVAL;
 	err = v4l2_prio_check(&dev->prio, &fh->prio);
 	if (0 != err)
 		return err;
@@ -1708,14 +1684,13 @@ static int tw68_s_audio(struct file *file, void *priv, struct v4l2_audio *a)
 {
 	return 0;
 }
-#endif
 
 static int tw68_g_priority(struct file *file, void *f, enum v4l2_priority *p)
 {
 	struct tw68_fh *fh = f;
 	struct tw68_dev *dev = fh->dev;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	*p = v4l2_prio_max(&dev->prio);
 	return 0;
 }
@@ -1726,13 +1701,17 @@ static int tw68_s_priority(struct file *file, void *f,
 	struct tw68_fh *fh = f;
 	struct tw68_dev *dev = fh->dev;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	return v4l2_prio_change(&dev->prio, &fh->prio, prio);
 }
 
 static int tw68_enum_fmt_vid_cap(struct file *file, void  *priv,
 					struct v4l2_fmtdesc *f)
 {
+	struct tw68_fh *fh = priv;
+	struct tw68_dev *dev = fh->dev;
+
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (f->index >= FORMATS)
 		return -EINVAL;
 
@@ -1750,7 +1729,7 @@ static int tw68_cropcap(struct file *file, void *priv,
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (cap->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
 	cap->bounds  = dev->crop_bounds;
@@ -1773,7 +1752,7 @@ static int tw68_g_crop(struct file *file, void *f, struct v4l2_crop *crop)
 	struct tw68_fh *fh = f;
 	struct tw68_dev *dev = fh->dev;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
 	crop->c = dev->crop_current;
@@ -1786,13 +1765,13 @@ static int tw68_s_crop(struct file *file, void *f, struct v4l2_crop *crop)
 	struct tw68_dev *dev = fh->dev;
 	struct v4l2_rect *b = &dev->crop_bounds;
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (res_locked(fh->dev, RESOURCE_VIDEO))
 		return -EBUSY;
 
 	if ((crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) ||
-	    (crop->c.height < 0) || (crop->c.width < 0) ) {
-		dprintk(1, "%s: invalid request\n", __func__);
+	    (crop->c.height < 0) || (crop->c.width < 0)) {
+		dprintk(DBG_UNEXPECTED, "%s: invalid request\n", __func__);
 		return -EINVAL;
 	}
 
@@ -1810,13 +1789,16 @@ static int tw68_s_crop(struct file *file, void *f, struct v4l2_crop *crop)
 	if (crop->c.width > b->left - crop->c.left + b->width)
 		crop->c.width = b->left - crop->c.left + b->width;
 
-	dprintk(90, "%s: setting cropping rectangle: top=%d, left=%d, "
+	dprintk(DBG_FLOW, "%s: setting cropping rectangle: top=%d, left=%d, "
 		    "width=%d, height=%d\n", __func__, crop->c.top,
 		    crop->c.left, crop->c.width, crop->c.height);
 	dev->crop_current = crop->c;
 	return 0;
 }
 
+/*
+ * Wrappers for the v4l2_ioctl_ops functions
+ */
 #ifdef CONFIG_VIDEO_V4L1_COMPAT
 static int vidiocgmbuf(struct file *file, void *priv, struct video_mbuf *mbuf)
 {
@@ -1859,7 +1841,7 @@ static int tw68_streamon(struct file *file, void *priv,
 	struct tw68_dev *dev = fh->dev;
 	int res = tw68_resource(fh);
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (!res_get(fh, res))
 		return -EBUSY;
 
@@ -1875,7 +1857,7 @@ static int tw68_streamoff(struct file *file, void *priv,
 	struct tw68_dev *dev = fh->dev;
 	int res = tw68_resource(fh);
 
-	dprintk(90,"%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	err = videobuf_streamoff(tw68_queue(fh));
 	if (err < 0)
 		return err;
@@ -1943,6 +1925,7 @@ static int vidioc_g_register(struct file *file, void *priv,
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;	/* needed for tw_readb */
 
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (!v4l2_chip_match_host(&reg->match))
 		return -EINVAL;
 	reg->val = tw_readb(reg->reg);
@@ -1956,13 +1939,12 @@ static int vidioc_s_register(struct file *file, void *priv,
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;	/* needed for tw_writeb */
 
-printk("%s: request to set reg 0x%04x to 0x%02x\n",__func__,
-(unsigned int)reg->reg,(unsigned int)reg->val);
-	if (!v4l2_chip_match_host(&reg->match))
-{
-printk("%s: match failed\n",__func__);
+	dprintk(DBG_TESTING, "%s: request to set reg 0x%04x to 0x%02x\n",
+		__func__, (unsigned int)reg->reg, (unsigned int)reg->val);
+	if (!v4l2_chip_match_host(&reg->match)) {
+		dprintk(DBG_TESTING, "%s: match failed\n", __func__);
 		return -EINVAL;
-}
+	}
 	tw_writeb(reg->reg & 0xffff, reg->val);
 	return 0;
 }
@@ -2011,13 +1993,13 @@ static const struct v4l2_ioctl_ops video_ioctl_ops = {
 	.vidioc_g_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
 	.vidioc_try_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
 	.vidioc_s_fmt_vbi_cap		= tw68_try_get_set_fmt_vbi_cap,
+#endif
 	.vidioc_g_audio			= tw68_g_audio,
 	.vidioc_s_audio			= tw68_s_audio,
 	.vidioc_g_tuner			= tw68_g_tuner,
 	.vidioc_s_tuner			= tw68_s_tuner,
 	.vidioc_g_frequency		= tw68_g_frequency,
 	.vidioc_s_frequency		= tw68_s_frequency,
-#endif
 #ifdef CONFIG_VIDEO_V4L1_COMPAT
 	.vidiocgmbuf			= vidiocgmbuf,
 #endif
@@ -2059,6 +2041,7 @@ int tw68_video_init1(struct tw68_dev *dev)
 {
 	int i;
 
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	/* sanitycheck insmod options */
 	if (gbuffers < 2 || gbuffers > VIDEO_MAX_FRAME)
 		gbuffers = 2;
@@ -2067,7 +2050,7 @@ int tw68_video_init1(struct tw68_dev *dev)
 	gbufsz = (gbufsz + PAGE_SIZE - 1) & PAGE_MASK;
 
 	/* put some sensible defaults into the data structures ... */
-	for (i = 0; i < ARRAY_SIZE(video_ctrls); i++)
+	for (i = 0; i < CTRLS; i++)
 		tw68_s_ctrl_value(dev, video_ctrls[i].id,
 				  video_ctrls[i].default_value);
 #if 0
@@ -2093,6 +2076,7 @@ int tw68_video_init1(struct tw68_dev *dev)
 
 int tw68_video_init2(struct tw68_dev *dev)
 {
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	set_tvnorm(dev, &tvnorms[0]);
 	video_mux(dev, 0);
 /*
@@ -2148,7 +2132,7 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 			tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 			tw_clearl(TW68_INTMASK, TW68_VID_INTS);
 			dev->pci_irqmask &= ~TW68_VID_INTS;
-			dprintk(40, "%s: stopper risc code entered\n",
+			dprintk(DBG_BUFF, "%s: stopper risc code entered\n",
 				__func__);
 		}
 		status &= ~(TW68_DMAPI | TW68_FFOF);
@@ -2181,8 +2165,7 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 		dev->pci_irqmask &= ~TW68_VID_INTS;
 #endif
 	}
-	if (status & TW68_FFERR) {
+	if (status & TW68_FFERR)
 		iprintk(2, "FFERR interrupt\n");
-	}
 	return;
 }

@@ -1,7 +1,7 @@
 /*
  *  tw68_controls.c
  *  Part of the device driver for Techwell 68xx based cards
- *  
+ *
  *  Much of this code is derived from the cx88 and sa7134 drivers, which
  *  were in turn derived from the bt87x driver.  The original work was by
  *  Gerd Knorr; more recently the code was enhanced by Mauro Carvalho Chehab,
@@ -29,25 +29,25 @@
 
 #include "tw68.h"
 
-static int buffer_setup (struct videobuf_queue *q, unsigned int *count,
-		unsigned int *size) {
+static int buffer_setup(struct videobuf_queue *q, unsigned int *count,
+			unsigned int *size) {
 	printk(KERN_INFO "%s: shouldn't be here!\n", __func__);
 	return 0;
 }
-static int buffer_prepare (struct videobuf_queue *q,
-                          struct videobuf_buffer *vb,
-                          enum v4l2_field field)
+static int buffer_prepare(struct videobuf_queue *q,
+			  struct videobuf_buffer *vb,
+			  enum v4l2_field field)
 {
 	printk(KERN_INFO "%s: shouldn't be here!\n", __func__);
 	return 0;
 }
-static void buffer_queue (struct videobuf_queue *q,
-			  struct videobuf_buffer *vb)
+static void buffer_queue(struct videobuf_queue *q,
+			 struct videobuf_buffer *vb)
 {
 	printk(KERN_INFO "%s: shouldn't be here!\n", __func__);
 }
-static void buffer_release (struct videobuf_queue *q,
-			    struct videobuf_buffer *vb)
+static void buffer_release(struct videobuf_queue *q,
+			   struct videobuf_buffer *vb)
 {
 	printk(KERN_INFO "%s: shouldn't be here!\n", __func__);
 }

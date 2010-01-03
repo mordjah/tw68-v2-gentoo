@@ -168,10 +168,10 @@ static int tw68_i2c_eeprom(struct tw68_dev *dev, unsigned char *eedata,
 	}
 
 	for (i = 0; i < len; i++) {
-		if ( 0 == (i % 16))
-			printk("%s: i2c eeprom %02x:",
+		if (0 == (i % 16))
+			printk(KERN_INFO "%s: i2c eeprom %02x:",
 				dev->name, i);
-		printk(" %02x", eedata[i]);
+		printk(KERN_INFO " %02x", eedata[i]);
 		if (15 == (i % 16))
 			printk("\n");
 	}
@@ -180,7 +180,7 @@ static int tw68_i2c_eeprom(struct tw68_dev *dev, unsigned char *eedata,
 
 #if 0
 static char *i2c_devs[128] = {
-	[ 0xa0 >> 1 ] = "eeprom",
+	[0xa0 >> 1] = "eeprom",
 };
 
 static void do_i2c_scan(char *name, struct i2c_client *c)

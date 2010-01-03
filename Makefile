@@ -1,7 +1,7 @@
 ifneq ($(KERNELRELEASE),)
 # call from kernel build system
 
-tw68-objs := tw68-core.o tw68-cards.o tw68-video.o tw68-ioctls.o \
+tw68-objs := tw68-core.o tw68-cards.o tw68-video.o \
 	     tw68-vbi.o tw68-ts.o tw68-risc.o tw68-tvaudio.o
 
 obj-m += tw68.o
@@ -23,7 +23,7 @@ insmod: all
 	sudo modprobe v4l2_common
 	sudo modprobe videobuf_dma_sg
 	sudo modprobe btcx_risc
-	sudo insmod tw68.ko core_debug=10 video_debug=10
+	sudo insmod tw68.ko core_debug=10 video_debug=7
 
 run: insmod
 	test -x /usr/bin/v4l2ucp && v4l2ucp &
