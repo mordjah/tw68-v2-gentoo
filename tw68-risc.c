@@ -162,7 +162,7 @@ int tw68_risc_buffer(struct pci_dev *pci,
 	 */
 	instructions  = fields * (1 + (((bpl + padding) * lines) /
 			 PAGE_SIZE) + lines) + 2;
-	btcx_riscmem_alloc(pci, risc, instructions * 8);
+	rc = btcx_riscmem_alloc(pci, risc, instructions * 8);
 	if (rc < 0)
 		return rc;
 

@@ -59,3 +59,6 @@ Added code for V4L2_CID_COLOR_KILLER and V4L2_CID_CHROMA_AGC
 Enhanced Makefile to allow for TW68_TESTING (determine whether or not to
 include experimental code), and to add a new target "install" to put the
 module into the current module directory.
+
+08 January 2010
+Fixed warning in tw68-risc.c
