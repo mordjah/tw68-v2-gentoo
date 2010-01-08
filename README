@@ -54,3 +54,8 @@ removed the comments. Added some amplification to comments on settings.
 Adjusted the values in tw68-video's NORM_525_60 using a very cheap NTSC
 camera.
 Added code for V4L2_CID_COLOR_KILLER and V4L2_CID_CHROMA_AGC
+
+08 January 2010
+Enhanced Makefile to allow for TW68_TESTING (determine whether or not to
+include experimental code), and to add a new target "install" to put the
+module into the current module directory.
