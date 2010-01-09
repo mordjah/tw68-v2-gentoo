@@ -62,3 +62,9 @@ module into the current module directory.
 
 08 January 2010
 Fixed warning in tw68-risc.c
+
+09 January 2010
+Initialised the GPIO register to fix ghosting on some inexpensive boards -
+special thanks to Ben at Sttech for the hardware debugging which isolated
+this problem.
+Added in a PCI ID for the TW6800 chip.  This is just to allow any users

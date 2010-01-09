@@ -57,6 +57,7 @@
 
 /* system vendor and device ID's */
 #define	PCI_VENDOR_ID_TECHWELL	0x1797
+#define	PCI_DEVICE_ID_VIDEO0	0x6800
 #define	PCI_DEVICE_ID_VIDEO1	0x6801
 #define	PCI_DEVICE_ID_AUDIO2	0x6802
 #define	PCI_DEVICE_ID_TS3	0x6803
