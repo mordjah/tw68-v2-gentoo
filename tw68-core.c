@@ -503,27 +503,26 @@ static irqreturn_t tw68_irq(int irq, void *dev_id)
 	struct tw68_dev *dev = dev_id;
 	u32 status;
 	int loop;
-	int handled = 0;
 
 	status = tw_readl(TW68_INTSTAT);
 	/* Check if anything to do */
 	if (0 == status)
 		return IRQ_RETVAL(0);	/* Nope - return */
 	for (loop = 0; loop < 10; loop++) {
-		status = tw_readl(TW68_INTSTAT);
-		if (0 == (status & dev->pci_irqmask))
+		status = tw_readl(TW68_INTSTAT) & dev->pci_irqmask;
+		if (0 == status)
 			goto out;
-		handled = 1;
 		if (status & TW68_VID_INTS)	/* video interrupt */
 			tw68_irq_video_done(dev, status);
+#ifdef TW68_TESTING
+		if (status & TW68_I2C_INTS)
+			tw68_irq_i2c(dev, status);
+#endif
 	}
-	printk(KERN_WARNING "%s/0: irq loop - clearing mask\n",
+	printk(KERN_WARNING "%s: irq loop done - clearing mask\n",
 		dev->name);
 	tw_writel(TW68_INTMASK, 0);
 out:
-	if (0 == handled)
-		printk(KERN_DEBUG "%s: Interrupt not handled - "
-			"status=0x%08x\n", __func__, status);
 	return IRQ_RETVAL(1);
 }
 
@@ -728,7 +727,8 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 		goto fail3;
 	}
 
-#if 0
+#ifdef TW68_TESTING
+	printk(KERN_INFO "Calling tw68_i2c_register\n");
 	/* Register the i2c bus */
 	tw68_i2c_register(dev);
 #endif
@@ -819,7 +819,7 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 
  fail4:
 	tw68_unregister_video(dev);
-#if 0
+#ifdef TW68_TESTING
 	tw68_i2c_unregister(dev);
 #endif
 	free_irq(pci_dev->irq, dev);
@@ -860,7 +860,7 @@ static void __devexit tw68_finidev(struct pci_dev *pci_dev)
 	mutex_unlock(&tw68_devlist_lock);
 	tw68_devcount--;
 
-#if 0
+#ifdef TW68_TESTING
 	tw68_i2c_unregister(dev);
 #endif
 	tw68_unregister_video(dev);

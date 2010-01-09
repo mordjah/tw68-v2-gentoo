@@ -362,6 +362,7 @@ struct tw68_dev {
 	u32			i2c_state;
 	u32			i2c_done;
 	wait_queue_head_t	i2c_queue;
+	int			i2c_rc;
 	unsigned char		eedata[256];
 
 	/* video+ts+vbi capture */
@@ -482,6 +483,7 @@ int tw68_tuner_callback(void *priv, int component, int command, int arg);
 
 int tw68_i2c_register(struct tw68_dev *dev);
 int tw68_i2c_unregister(struct tw68_dev *dev);
+void tw68_irq_i2c(struct tw68_dev *dev, int status);
 
 /* ----------------------------------------------------------- */
 /* tw68-video.c                                                */
