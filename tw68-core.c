@@ -426,6 +426,22 @@ static int tw68_hw_init1(struct tw68_dev *dev)
 	tw_writel(TW68_DMAC, 0x2000);	/* patch set had 0x2080 */
 	tw_writel(TW68_TESTREG, 0);	/* 02C */
 
+	/*
+	 * Some common boards, especially inexpensive single-chip models,
+	 * use the GPIO bits 0-2 to control an on-board video-output mux.
+	 * For these boards, we need to set up the GPIO register into
+	 * "normal" mode, set bits 0-2 as output, and then set those bits
+	 * zero.
+	 *
+	 * Eventually, it would be nice if we could identify these boards
+	 * uniquely, and only do this initialisation if the board has been
+	 * identify.  For the moment, however, it shouldn't hurt anything
+	 * to do these steps.
+	 */
+	tw_writel(TW68_GPIOC, 0);	/* Set the GPIO to "normal", no ints */
+	tw_writel(TW68_GPOE, 7);	/* Set bits 0, 1 and 2 to "output" */
+	tw_writel(TW68_GPDATA, 0);	/* Set all bits to low state */
+
 	/* Initialize the device control structures */
 	mutex_init(&dev->lock);
 	spin_lock_init(&dev->slock);
