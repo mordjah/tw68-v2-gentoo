@@ -403,7 +403,8 @@ static int tw68_hw_init1(struct tw68_dev *dev)
 	tw_writeb(TW68_SYNCT, 0x38);	/* 294	Sync amplitude */
 	tw_writeb(TW68_MISSCNT, 0x44);	/* 298	Horiz sync, VCR detect sens */
 	tw_writeb(TW68_PCLAMP, 0x28);	/* 29C	Clamp pos from PLL sync */
-	tw_writeb(TW68_VCNTL1, 0);	/* 2A0 */
+	/* Bit DETV of VCNTL1 helps sync multi cams/chip board */
+	tw_writeb(TW68_VCNTL1, 0x04);	/* 2A0 */
 	tw_writeb(TW68_VCNTL2, 0);	/* 2A4 */
 	tw_writeb(TW68_CKILL, 0x68);	/* 2A8	Mfg specified reset val */
 	tw_writeb(TW68_COMB, 0x44);	/* 2AC	Mfg specified reset val */
@@ -428,9 +429,9 @@ static int tw68_hw_init1(struct tw68_dev *dev)
 
 	/*
 	 * Some common boards, especially inexpensive single-chip models,
-	 * use the GPIO bits 0-2 to control an on-board video-output mux.
+	 * use the GPIO bits 0-3 to control an on-board video-output mux.
 	 * For these boards, we need to set up the GPIO register into
-	 * "normal" mode, set bits 0-2 as output, and then set those bits
+	 * "normal" mode, set bits 0-3 as output, and then set those bits
 	 * zero.
 	 *
 	 * Eventually, it would be nice if we could identify these boards
@@ -439,7 +440,7 @@ static int tw68_hw_init1(struct tw68_dev *dev)
 	 * to do these steps.
 	 */
 	tw_writel(TW68_GPIOC, 0);	/* Set the GPIO to "normal", no ints */
-	tw_writel(TW68_GPOE, 7);	/* Set bits 0, 1 and 2 to "output" */
+	tw_writel(TW68_GPOE, 0x0f);	/* Set bits 0-3 to "output" */
 	tw_writel(TW68_GPDATA, 0);	/* Set all bits to low state */
 
 	/* Initialize the device control structures */

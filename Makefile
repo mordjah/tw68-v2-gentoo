@@ -48,7 +48,7 @@ clean:
 	rm -rf modules.order videotest
 
 insmod: all
-	-sudo rmmod tw68 2>&1 > /dev/null
+	-sudo rmmod tw68 > /dev/null 2>&1
 	sudo modprobe v4l2_common
 	sudo modprobe videobuf_dma_sg
 	sudo modprobe btcx_risc

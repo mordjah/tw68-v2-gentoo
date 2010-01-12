@@ -514,7 +514,7 @@ static void res_free(struct tw68_fh *fh,
  */
 static void set_tvnorm(struct tw68_dev *dev, struct tw68_tvnorm *norm)
 {
-	dprintk(DBG_FLOW, "%s: %s\n", __func__, norm->name);
+	dprintk(DBG_TESTING, "%s: %s\n", __func__, norm->name);
 	dev->tvnorm = norm;
 
 	/* setup cropping */
@@ -532,12 +532,15 @@ static void set_tvnorm(struct tw68_dev *dev, struct tw68_tvnorm *norm)
 
 	dev->crop_current = dev->crop_defrect;
 
-	tw68_set_tvnorm_hw(dev);
+	if (norm != dev->tvnorm) {
+		dev->tvnorm = norm;
+		tw68_set_tvnorm_hw(dev);
+	}
 }
 
 static void video_mux(struct tw68_dev *dev, int input)
 {
-	dprintk(DBG_FLOW, "%s: input = %d [%s]\n", __func__, input,
+	dprintk(DBG_TESTING, "%s: input = %d [%s]\n", __func__, input,
 		card_in(dev, input).name);
 	tw_andorb(TW68_INFORM, 0x03 << 2, input << 2);
 	dev->ctl_input = input;
@@ -863,7 +866,7 @@ static int tw68_g_ctrl_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 {
 	const struct v4l2_queryctrl *ctrl;
 
-	dprintk(DBG_FLOW, "%s\n", __func__);
+	dprintk(DBG_TESTING, "%s\n", __func__);
 	ctrl = ctrl_by_id(c->id);
 	if (NULL == ctrl)
 		return -EINVAL;
@@ -928,14 +931,10 @@ static int tw68_s_ctrl_value(struct tw68_dev *dev, __u32 id, int val)
 		tw_writeb(TW68_SAT_V, val);
 		break;
 	case V4L2_CID_COLOR_KILLER:
-		dprintk(DBG_TESTING, "%s: reg is 0x%02x, val is %d\n",
-			__func__, tw_readb(TW68_MISC2), val);
 		if (val)
 			tw_andorb(TW68_MISC2, 0xe0, 0xe0);
 		else
 			tw_andorb(TW68_MISC2, 0xe0, 0x00);
-		dprintk(DBG_TESTING, "%s: reg is now 0x%02x\n",
-			__func__, tw_readb(TW68_MISC2));
 		break;
 	case V4L2_CID_CHROMA_AGC:
 		if (val)
@@ -2033,7 +2032,6 @@ int tw68_videoport_init(struct tw68_dev *dev)
 void tw68_set_tvnorm_hw(struct tw68_dev *dev)
 {
 	tw_andorb(TW68_SDT, 0x07, dev->tvnorm->format);
-	tw_andorb(TW68_RESERV2, 0x07, dev->tvnorm->format);
 	return;
 }
 
