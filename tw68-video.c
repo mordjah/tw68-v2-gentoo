@@ -57,19 +57,7 @@ MODULE_PARM_DESC(noninterlaced, "capture non interlaced video");
 module_param_string(secam, secam, sizeof(secam), 0644);
 MODULE_PARM_DESC(secam, "force SECAM variant, either DK,L or Lc");
 
-/*
- * dprintk statements within the code use a 'level' argument.  For
- * our purposes, we use the following levels:
- */
-#define	DBG_UNEXPECTED	(1 << 0)
-#define	DBG_UNUSUAL	(1 << 1)
-#define	DBG_TESTING	(1 << 2)
-#define	DBG_BUFF	(1 << 3)
-#define	DBG_FLOW	(1 << 15)
-
 #define dprintk(level, fmt, arg...)     if (video_debug & level) \
-	printk(KERN_DEBUG "%s/0: " fmt, dev->name , ## arg)
-#define iprintk(level, fmt, arg...)	if (irq_debug >= level) \
 	printk(KERN_DEBUG "%s/0: " fmt, dev->name , ## arg)
 
 /* ------------------------------------------------------------------ */
@@ -540,10 +528,13 @@ static void set_tvnorm(struct tw68_dev *dev, struct tw68_tvnorm *norm)
 
 static void video_mux(struct tw68_dev *dev, int input)
 {
-	dprintk(DBG_TESTING, "%s: input = %d [%s]\n", __func__, input,
+	dprintk(DBG_FLOW, "%s: input = %d [%s]\n", __func__, input,
 		card_in(dev, input).name);
-	tw_andorb(TW68_INFORM, 0x03 << 2, input << 2);
-	dev->ctl_input = input;
+	/*
+	 * dev->input shows current application request,
+	 * dev->hw_input shows current hardware setting
+	 */
+	dev->input = &card_in(dev, input);
 	tw68_tvaudio_setinput(dev, &card_in(dev, input));
 }
 
@@ -646,12 +637,18 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 static int tw68_video_start_dma(struct tw68_dev *dev, struct tw68_dmaqueue *q,
 				struct tw68_buf *buf) {
 
-	dprintk(DBG_BUFF, "%s: Starting risc program\n", __func__);
-	/* TODO - set scale registers */
+	dprintk(DBG_FLOW, "%s: Starting risc program\n", __func__);
+	/* Assure correct input */
+	if (dev->hw_input != dev->input) {
+		dev->hw_input = dev->input;
+		tw_andorb(TW68_INFORM, 0x03 << 2, dev->input->vmux << 2);
+	}
+	/* Set cropping and scaling */
 	tw68_set_scale(dev, buf->vb.width, buf->vb.height, buf->vb.field);
+	/* Set start address for RISC program */
 	tw_writel(TW68_DMAP_SA, cpu_to_le32(buf->risc.dma));
 	/* Clear any pending interrupts */
-	tw_writel(TW68_INTSTAT, 0xffffffff);
+	tw_writel(TW68_INTSTAT, TW68_VID_INTS);
 	/* Enable the risc engine and the fifo */
 	tw_andorl(TW68_DMAC, 0x7f, buf->fmt->twformat |
 		ColorFormatGamma | TW68_DMAP_EN | TW68_FIFO_EN);
@@ -700,6 +697,11 @@ static int buffer_activate(struct tw68_dev *dev, struct tw68_buf *buf,
 {
 	dprintk(DBG_BUFF, "%s: dev=%p, buf=%p, next=%p\n",
 		__func__, dev, buf, next);
+	if (dev->hw_input != dev->input) {
+		dev->hw_input = dev->input;
+		tw_andorb(TW68_INFORM, 0x03 << 2,
+			  dev->hw_input->vmux << 2);
+	}
 	buf->vb.state = VIDEOBUF_ACTIVE;
 	/* TODO - need to assure scaling/cropping are set correctly */
 	mod_timer(&dev->video_q.timeout, jiffies+BUFFER_TIMEOUT);
@@ -757,6 +759,7 @@ buffer_prepare(struct videobuf_queue *q, struct videobuf_buffer *vb,
 		buf->vb.field  = field;
 		init_buffer = 1;	/* force risc code re-generation */
 	}
+	buf->input = dev->input;
 
 	if (VIDEOBUF_NEEDS_INIT == buf->vb.state) {
 		rc = videobuf_iolock(q, &buf->vb, NULL);
@@ -866,7 +869,7 @@ static int tw68_g_ctrl_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 {
 	const struct v4l2_queryctrl *ctrl;
 
-	dprintk(DBG_TESTING, "%s\n", __func__);
+	dprintk(DBG_FLOW, "%s\n", __func__);
 	ctrl = ctrl_by_id(c->id);
 	if (NULL == ctrl)
 		return -EINVAL;
@@ -1123,7 +1126,7 @@ found:
 		tw_call_all(dev, tuner, s_radio);
 	} else {
 		/* switch to video/vbi mode */
-		video_mux(dev, dev->ctl_input);
+		tw68_tvaudio_setinput(dev, dev->input);
 	}
 	return 0;
 }
@@ -1404,12 +1407,16 @@ static int tw68_enum_input(struct file *file, void *priv,
 	struct tw68_dev *dev = fh->dev;
 	unsigned int n;
 
-	dprintk(DBG_FLOW, "%s\n", __func__);
 	n = i->index;
-	if (n >= TW68_INPUT_MAX)
+	dprintk(DBG_FLOW, "%s: index is %d\n", __func__, n);
+	if (n >= TW68_INPUT_MAX) {
+		dprintk(DBG_FLOW, "%s: INPUT_MAX reached\n", __func__);
 		return -EINVAL;
-	if (NULL == card_in(dev, i->index).name)
+	}
+	if (NULL == card_in(dev, n).name) {
+		dprintk(DBG_FLOW, "%s: End of list\n", __func__);
 		return -EINVAL;
+	}
 	memset(i, 0, sizeof(*i));
 	i->index = n;
 	i->type  = V4L2_INPUT_TYPE_CAMERA;
@@ -1417,7 +1424,8 @@ static int tw68_enum_input(struct file *file, void *priv,
 	if (card_in(dev, n).tv)
 		i->type = V4L2_INPUT_TYPE_TUNER;
 	i->audioset = 1;
-	if (n == dev->ctl_input) {
+	/* If the query is for the current input, get live data */
+	if (n == dev->hw_input->vmux) {
 		int v1 = tw_readb(TW68_STATUS1);
 		int v2 = tw_readb(TW68_MVSN);
 
@@ -1442,7 +1450,7 @@ static int tw68_g_input(struct file *file, void *priv, unsigned int *i)
 	struct tw68_dev *dev = fh->dev;
 
 	dprintk(DBG_FLOW, "%s\n", __func__);
-	*i = dev->ctl_input;
+	*i = dev->input->vmux;
 	return 0;
 }
 
@@ -1926,9 +1934,12 @@ static int vidioc_g_register(struct file *file, void *priv,
 
 	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (!v4l2_chip_match_host(&reg->match))
+		dprintk(DBG_UNEXPECTED, "%s: match failed\n", __func__);
 		return -EINVAL;
-	reg->val = tw_readb(reg->reg);
-	reg->size = 1;
+	if (reg->size == 1)
+		reg->val = tw_readb(reg->reg);
+	else
+		reg->val = tw_readl(reg->reg);
 	return 0;
 }
 
@@ -1938,13 +1949,16 @@ static int vidioc_s_register(struct file *file, void *priv,
 	struct tw68_fh *fh = priv;
 	struct tw68_dev *dev = fh->dev;	/* needed for tw_writeb */
 
-	dprintk(DBG_TESTING, "%s: request to set reg 0x%04x to 0x%02x\n",
+	dprintk(DBG_FLOW, "%s: request to set reg 0x%04x to 0x%02x\n",
 		__func__, (unsigned int)reg->reg, (unsigned int)reg->val);
 	if (!v4l2_chip_match_host(&reg->match)) {
-		dprintk(DBG_TESTING, "%s: match failed\n", __func__);
+		dprintk(DBG_UNEXPECTED, "%s: match failed\n", __func__);
 		return -EINVAL;
 	}
-	tw_writeb(reg->reg & 0xffff, reg->val);
+	if (reg->size == 1)
+		tw_writeb(reg->reg, reg->val);
+	else
+		tw_writel(reg->reg & 0xffff, reg->val);
 	return 0;
 }
 #endif
@@ -2109,16 +2123,19 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 
 	/* reset interrupts handled by this routine */
 	tw_writel(TW68_INTSTAT, status);
-
-	/* Check most likely first */
+	/*
+	 * Check most likely first
+	 *
+	 * DMAPI shows we have reached the end of the risc code
+	 * for the current buffer.
+	 */
 	if (status & TW68_DMAPI) {
 		struct tw68_dmaqueue *q = &dev->video_q;
-		iprintk(2, "DMAPI interrupt\n");
+		dprintk(DBG_FLOW, "DMAPI interrupt\n");
 		spin_lock(&dev->slock);
 		/*
-		 * DMAPI shows we have reached the end of the risc code
-		 * for the current buffer.  tw68_wakeup will take care
-		 * of the buffer handling, plus any non-video requirements.
+		 * tw68_wakeup will take care of the buffer handling,
+		 * plus any non-video requirements.
 		 */
 		tw68_wakeup(q, &dev->video_fieldcount);
 		spin_unlock(&dev->slock);
@@ -2130,40 +2147,38 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 			tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 			tw_clearl(TW68_INTMASK, TW68_VID_INTS);
 			dev->pci_irqmask &= ~TW68_VID_INTS;
-			dprintk(DBG_BUFF, "%s: stopper risc code entered\n",
+			status &= ~TW68_VID_INTS;
+			dprintk(DBG_FLOW, "%s: stopper risc code entered\n",
 				__func__);
 		}
-		status &= ~(TW68_DMAPI | TW68_FFOF);
+		status &= ~(TW68_DMAPI);
 		if (0 == status)
 			return;
 	}
+	if (status & (TW68_VLOCK | TW68_HLOCK)) { /* lost sync */
+		dprintk(DBG_UNUSUAL, "Lost sync\n");
+	}
 	if (status & TW68_PABORT) {	/* TODO - what should we do? */
-		iprintk(2, "PABORT interrupt\n");
+		dprintk(DBG_UNEXPECTED, "PABORT interrupt\n");
 	}
 	if (status & TW68_DMAPERR) {
-		iprintk(2, "DMAPERR interrupt\n");
+		dprintk(DBG_UNEXPECTED, "DMAPERR interrupt\n");
 		/* Stop risc & fifo */
 		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 		tw_clearl(TW68_INTMASK, TW68_VID_INTS);
 		dev->pci_irqmask &= ~TW68_VID_INTS;
 	}
 	if (status & TW68_FDMIS) {	/* logic error somewhere */
-		iprintk(2, "FDMIS interrupt\n");
+		dprintk(DBG_UNEXPECTED, "FDMIS interrupt\n");
 		/* Stop risc & fifo */
 		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 		tw_clearl(TW68_INTMASK, TW68_VID_INTS);
 		dev->pci_irqmask &= ~TW68_VID_INTS;
 	}
 	if (status & TW68_FFOF) {	/* probably a logic error */
-		iprintk(2, "FFOF interrupt\n");
-#if 0
-		/* Stop risc & fifo */
-		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-		tw_clearl(TW68_INTMASK, TW68_VID_INTS);
-		dev->pci_irqmask &= ~TW68_VID_INTS;
-#endif
+		dprintk(DBG_FLOW, "FFOF interrupt\n");
 	}
 	if (status & TW68_FFERR)
-		iprintk(2, "FFERR interrupt\n");
+		dprintk(DBG_FLOW, "FFERR interrupt\n");
 	return;
 }

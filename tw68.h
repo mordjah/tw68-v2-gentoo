@@ -55,6 +55,16 @@
 
 #define	UNSET	(-1U)
 
+/*
+ * dprintk statement within the code use a 'level' argument.  For
+ * our purposes, we use the following levels:
+ */
+#define	DBG_UNEXPECTED		(1 << 0)
+#define	DBG_UNUSUAL		(1 << 1)
+#define	DBG_TESTING		(1 << 2)
+#define	DBG_BUFF		(1 << 3)
+#define	DBG_FLOW		(1 << 15)
+
 /* system vendor and device ID's */
 #define	PCI_VENDOR_ID_TECHWELL	0x1797
 #define	PCI_DEVICE_ID_VIDEO0	0x6800
@@ -74,8 +84,11 @@
 	V4L2_STD_PAL_M  | V4L2_STD_PAL_N     | V4L2_STD_PAL_Nc   | \
 	V4L2_STD_PAL_60 | V4L2_STD_SECAM_L   | V4L2_STD_SECAM_DK)
 
-#define	TW68_VID_INTS	(TW68_FFERR | TW68_PABORT | TW68_DMAPERR | \
+#define	TW68_VID_INTS	(\
+			 TW68_VLOCK | TW68_HLOCK  | \
+			 TW68_FFERR | TW68_PABORT | TW68_DMAPERR | \
 			 TW68_FDMIS | TW68_FFOF   | TW68_DMAPI)
+
 #define	TW68_I2C_INTS	(TW68_SBERR | TW68_SBDONE | TW68_SBERR2  | \
 			 TW68_SBDONE2)
 
@@ -215,6 +228,7 @@ struct tw68_buf {
 
 	/* tw68 specific */
 	struct tw68_format	*fmt;
+	struct tw68_input	*input;
 	unsigned int		top_seen;
 	int (*activate)(struct tw68_dev *dev,
 			struct tw68_buf *buf,
@@ -375,8 +389,8 @@ struct tw68_dev {
 	/* various v4l controls */
 	struct tw68_tvnorm	*tvnorm;	/* video */
 	struct tw68_tvaudio	*tvaudio;
-	unsigned int		ctl_input;
 #if 0
+	unsigned int		ctl_input;
 	int			ctl_bright;
 	int			ctl_contrast;
 	int			ctl_hue;
@@ -399,6 +413,7 @@ struct tw68_dev {
 	/* other global state info */
 	unsigned int		automute;
 	struct tw68_thread	thread;
+	/* input is latest requested by app, hw_input is current hw setting */
 	struct tw68_input	*input;
 	struct tw68_input	*hw_input;
 	unsigned int		hw_mute;
@@ -435,8 +450,8 @@ struct tw68_dev {
 		writel((readl(dev->lmmio + ((reg) >> 2)) & ~(bit)), \
 		dev->lmmio + ((reg) >> 2))
 #define	tw_clearb(reg, bit)	\
-		writeb((readb(dev->bmmio+((reg)>>2)) & ~(bit)), \
-		dev->bmmio + ((reg) >> 2))
+		writeb((readb(dev->bmmio+(reg)) & ~(bit)), \
+		dev->bmmio + (reg))
 #define tw_call_all(dev, o, f, args...) do {				\
 	if (dev->gate_ctrl)						\
 		dev->gate_ctrl(dev, 1);					\

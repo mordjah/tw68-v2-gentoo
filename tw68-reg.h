@@ -199,21 +199,7 @@
 #define ColorFormatRGB16	 0x20
 #define ColorFormatRGB15	 0x30
 #define ColorFormatYUY2		 0x40
-#if 0
-#define ColorFormatBTYUV	 0x0055
-#define ColorFormatY8		 0x0066
-#define ColorFormatRGB8		 0x0077
-#define ColorFormatPL422	 0x0088
-#define ColorFormatPL411	 0x0099
-#define ColorFormatYUV12	 0x00AA
-#define ColorFormatYUV9		 0x00BB
-#define ColorFormatRAW		 0x00EE
-#endif
 #define ColorFormatBSWAP         0x04
 #define ColorFormatWSWAP         0x08
-#if 0
-#define ColorFormatEvenMask      0x050f
-#define ColorFormatOddMask       0x0af0
-#endif
-#define ColorFormatGamma         0x1000
+#define ColorFormatGamma         0x80
 #endif

@@ -76,3 +76,15 @@ Changed GPIO init to do 4 bits instead of 3.
 Changed set_tvnorm to only write reg if changed.
 Removed initialisation of TW68-RESERV2 register, since I didn't know what
 it is for.
+
+19 January 2010
+Changed debug logging in tw68-core.c to follow tw68-video.c flag settings.
+Changed handling of mux switching.  Structure 'dev' now has two fields,
+'input' and 'hw_input', which point to details of mux setting for card. When
+the v4l2 command to switch input is received, 'input' is changed accordingly.
+At the interrupt at the end of the current frame occurs, the hardware is
+switched and 'hw_input' is set.
+Corrected value for setting of ColorFormatGamma bit.
+Added VLOCK and HLOCK to video interrupt handling routine.
+Corrected tw_clearb macro definition.
+Bumped version number to 0.0.3

@@ -48,15 +48,15 @@ clean:
 	rm -rf modules.order videotest
 
 insmod: all
-	-sudo rmmod tw68 > /dev/null 2>&1
-	sudo modprobe v4l2_common
-	sudo modprobe videobuf_dma_sg
-	sudo modprobe btcx_risc
+	-@sudo rmmod tw68 > /dev/null 2>&1
+	@sudo modprobe v4l2_common
+	@sudo modprobe videobuf_dma_sg
+	@sudo modprobe btcx_risc
 ifneq ($(TW68_TESTING),)
-	sudo modprobe i2c_algo_bit
-	sudo insmod tw68.ko core_debug=10 video_debug=7
+	@sudo modprobe i2c_algo_bit
+	@sudo insmod tw68.ko core_debug=7 video_debug=7
 else
-	sudo insmod tw68.ko
+	@sudo insmod tw68.ko
 endif
 
 run: insmod

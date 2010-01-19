@@ -78,6 +78,9 @@ struct tw68_board tw68_boards[] = {
 			}, {
 				.name = name_comp4,
 				.vmux = 3,
+			}, {	/* Must have a NULL entry at end of list */
+				.name = NULL,
+				.vmux = 0,
 			}
 		},
 	},
@@ -128,6 +131,7 @@ int tw68_board_init1(struct tw68_dev *dev)
 				"using generic values\n", dev->name);
 		break;
 	}
+	dev->input = dev->hw_input = &card_in(dev,0);
 	return 0;
 }
 

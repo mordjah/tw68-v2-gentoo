@@ -102,7 +102,7 @@ EXPORT_SYMBOL(tw68_dmasound_init);
 int (*tw68_dmasound_exit)(struct tw68_dev *dev);
 EXPORT_SYMBOL(tw68_dmasound_exit);
 
-#define dprintk(level, fmt, arg...)      if (core_debug >= level) \
+#define dprintk(level, fmt, arg...)      if (core_debug & level) \
 	printk(KERN_DEBUG "%s: " fmt, dev->name , ## arg)
 
 /* ------------------------------------------------------------------ */
@@ -110,6 +110,9 @@ EXPORT_SYMBOL(tw68_dmasound_exit);
 void tw68_dma_free(struct videobuf_queue *q, struct tw68_buf *buf)
 {
 	struct videobuf_dmabuf *dma = videobuf_to_dma(&buf->vb);
+	
+	if (core_debug & DBG_FLOW)
+		printk(KERN_DEBUG "%s: called\n", __func__);
 	BUG_ON(in_interrupt());
 
 	videobuf_waiton(&buf->vb, 0, 0);
@@ -159,10 +162,10 @@ int tw68_buffer_requeue(struct tw68_dev *dev,
 {
 	struct tw68_buf *buf, *prev;
 
-	dprintk(100, "%s: called\n", __func__);
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	if (!list_empty(&q->active)) {
 		buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
-		dprintk(40, "%s: [%p/%d] restart dma\n", __func__,
+		dprintk(DBG_BUFF, "%s: [%p/%d] restart dma\n", __func__,
 			buf, buf->vb.i);
 		q->start_dma(dev, q, buf);
 		mod_timer(&q->timeout, jiffies + BUFFER_TIMEOUT);
@@ -179,16 +182,18 @@ int tw68_buffer_requeue(struct tw68_dev *dev,
 			list_move_tail(&buf->vb.queue, &q->active);
 			q->start_dma(dev, q, buf);
 			buf->activate(dev, buf, NULL);
-			dprintk(40, "%s: [%p/%d] first active\n",
+			dprintk(DBG_BUFF, "%s: [%p/%d] first active\n",
 				__func__, buf, buf->vb.i);
 
-		} else if (q->buf_compat(prev, buf)) {
+		} else if (q->buf_compat(prev, buf) &&
+			   (prev->fmt == buf->fmt)) {
 			list_move_tail(&buf->vb.queue, &q->active);
 			buf->activate(dev, buf, NULL);
 			prev->risc.jmp[1] = cpu_to_le32(buf->risc.dma);
-			dprintk(40, "%s: [%p/%d] move to active\n",
+			dprintk(DBG_BUFF, "%s: [%p/%d] move to active\n",
 				__func__, buf, buf->vb.i);
 		} else {
+			dprintk(DBG_BUFF, "%s: no action taken\n", __func__);
 			return 0;
 		}
 		prev = buf;
@@ -227,6 +232,7 @@ void tw68_wakeup(struct tw68_dmaqueue *q, unsigned int *fc)
 	struct tw68_dev *dev = q->dev;
 	struct tw68_buf *buf;
 
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	if (list_empty(&q->active)) {
 		del_timer(&q->timeout);
 		return;
@@ -234,7 +240,7 @@ void tw68_wakeup(struct tw68_dmaqueue *q, unsigned int *fc)
 	buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
 	do_gettimeofday(&buf->vb.ts);
 	buf->vb.field_count = (*fc)++;
-	dprintk(50, "%s: [%p/%d] field_count=%d\n",
+	dprintk(DBG_BUFF, "%s: [%p/%d] field_count=%d\n",
 		__func__, buf, buf->vb.i, *fc);
 	buf->vb.state = VIDEOBUF_DONE;
 	list_del(&buf->vb.queue);
@@ -253,8 +259,9 @@ void tw68_buffer_queue(struct tw68_dev *dev,
 {
 	struct tw68_buf    *prev;
 
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	assert_spin_locked(&dev->slock);
-	dprintk(50, "%s: queuing buffer %p\n", __func__, buf);
+	dprintk(DBG_BUFF, "%s: queuing buffer %p\n", __func__, buf);
 
 	/* append a 'JUMP to stopper' to the buffer risc program */
 	buf->risc.jmp[0] = cpu_to_le32(RISC_JUMP | RISC_INT_BIT);
@@ -269,12 +276,12 @@ void tw68_buffer_queue(struct tw68_dev *dev,
 	if (!list_empty(&q->queued)) {
 		list_add_tail(&buf->vb.queue, &q->queued);
 		buf->vb.state = VIDEOBUF_QUEUED;
-		dprintk(40, "%s: [%p/%d] appended to queued\n",
+		dprintk(DBG_BUFF, "%s: [%p/%d] appended to queued\n",
 			__func__, buf, buf->vb.i);
 
 	/* else if the 'active' chain doesn't yet exist we create it now */
 	} else if (list_empty(&q->active)) {
-		dprintk(40, "%s: [%p/%d] first active\n",
+		dprintk(DBG_BUFF, "%s: [%p/%d] first active\n",
 			__func__, buf, buf->vb.i);
 		list_add_tail(&buf->vb.queue, &q->active);
 		q->start_dma(dev, q, buf);	/* 1st one - start dma */
@@ -292,13 +299,13 @@ void tw68_buffer_queue(struct tw68_dev *dev,
 			/* the param 'prev' is only for debug printing */
 			buf->activate(dev, buf, prev);
 			list_add_tail(&buf->vb.queue, &q->active);
-			dprintk(40, "%s: [%p/%d] appended to active\n",
+			dprintk(DBG_BUFF, "%s: [%p/%d] appended to active\n",
 				__func__, buf, buf->vb.i);
 		} else {
 			/* If "incompatible", append to queued chain */
 			list_add_tail(&buf->vb.queue, &q->queued);
 			buf->vb.state = VIDEOBUF_QUEUED;
-			dprintk(40, "%s: [%p/%d] incompatible - appended "
+			dprintk(DBG_BUFF, "%s: [%p/%d] incompatible - appended "
 				"to queued\n", __func__, buf, buf->vb.i);
 		}
 	}
@@ -319,7 +326,7 @@ void tw68_buffer_timeout(unsigned long data)
 	struct tw68_buf *buf;
 	unsigned long flags;
 
-	dprintk(100, "%s called\n", __func__);
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	spin_lock_irqsave(&dev->slock, flags);
 
 	/* flag all current active buffers as failed */
@@ -353,6 +360,7 @@ static int tw68_hw_enable1(struct tw68_dev *dev)
  */
 static int tw68_hw_init1(struct tw68_dev *dev)
 {
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	/* Assure all interrupts are disabled */
 	tw_writel(TW68_INTMASK, 0);		/* 020 */
 	/* Clear any pending interrupts */
@@ -463,11 +471,18 @@ static int tw68_hw_init1(struct tw68_dev *dev)
 /* late init (with i2c + irq) */
 static int tw68_hw_enable2(struct tw68_dev *dev)
 {
+
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
+#ifdef	TW68_TESTING
+	dev->pci_irqmask |= TW68_I2C_INTS;
+#endif
+	tw_setl(TW68_INTMASK, dev->pci_irqmask);
 	return 0;
 }
 
 static int tw68_hw_init2(struct tw68_dev *dev)
 {
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	tw68_video_init2(dev);	/* initialise video function first */
 	tw68_tvaudio_init2(dev);/* audio next */
 
@@ -479,6 +494,7 @@ static int tw68_hw_init2(struct tw68_dev *dev)
 /* shutdown */
 static int tw68_hwfini(struct tw68_dev *dev)
 {
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	if (card_has_mpeg(dev))
 		tw68_ts_fini(dev);
 	tw68_input_fini(dev);
@@ -518,10 +534,10 @@ static void __devinit must_configure_manually(void)
 static irqreturn_t tw68_irq(int irq, void *dev_id)
 {
 	struct tw68_dev *dev = dev_id;
-	u32 status;
+	u32 status, orig;
 	int loop;
 
-	status = tw_readl(TW68_INTSTAT);
+	status = orig = tw_readl(TW68_INTSTAT);
 	/* Check if anything to do */
 	if (0 == status)
 		return IRQ_RETVAL(0);	/* Nope - return */
@@ -536,8 +552,9 @@ static irqreturn_t tw68_irq(int irq, void *dev_id)
 			tw68_irq_i2c(dev, status);
 #endif
 	}
-	printk(KERN_WARNING "%s: irq loop done - clearing mask\n",
-		dev->name);
+	printk(KERN_WARNING "%s: irq loop done - clearing mask (orig "
+			    "0x%08x, cur 0x%08x)\n",
+			    dev->name, orig, tw_readl(TW68_INTSTAT));
 	tw_writel(TW68_INTMASK, 0);
 out:
 	return IRQ_RETVAL(1);
@@ -554,6 +571,7 @@ static struct video_device *vdev_init(struct tw68_dev *dev,
 {
 	struct video_device *vfd;
 
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	vfd = video_device_alloc();
 	if (NULL == vfd)
 		return NULL;
@@ -569,6 +587,8 @@ static struct video_device *vdev_init(struct tw68_dev *dev,
 
 static void tw68_unregister_video(struct tw68_dev *dev)
 {
+
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	if (dev->video_dev) {
 		if (-1 != dev->video_dev->minor)
 			video_unregister_device(dev->video_dev);
@@ -597,6 +617,7 @@ static void mpeg_ops_attach(struct tw68_mpeg_ops *ops,
 {
 	int err;
 
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	if (NULL != dev->mops)
 		return;
 	if (tw68_boards[dev->board].mpeg != ops->type)
@@ -610,6 +631,7 @@ static void mpeg_ops_attach(struct tw68_mpeg_ops *ops,
 static void mpeg_ops_detach(struct tw68_mpeg_ops *ops,
 			    struct tw68_dev *dev)
 {
+
 	if (NULL == dev->mops)
 		return;
 	if (dev->mops != ops)
@@ -624,6 +646,8 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 	struct tw68_dev *dev;
 	struct tw68_mpeg_ops *mops;
 	int err;
+
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	if (tw68_devcount == TW68_MAXBOARDS)
 		return -ENOMEM;
 
@@ -745,6 +769,8 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 	}
 
 #ifdef TW68_TESTING
+	dev->pci_irqmask |= TW68_SBDONE;
+	tw_setl(TW68_INTMASK, dev->pci_irqmask);
 	printk(KERN_INFO "Calling tw68_i2c_register\n");
 	/* Register the i2c bus */
 	tw68_i2c_register(dev);
@@ -860,6 +886,7 @@ static void __devexit tw68_finidev(struct pci_dev *pci_dev)
 		container_of(v4l2_dev, struct tw68_dev, v4l2_dev);
 	struct tw68_mpeg_ops *mops;
 
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	/* Release DMA sound modules if present */
 	if (tw68_dmasound_exit && dev->dmasound.priv_data)
 		tw68_dmasound_exit(dev);
@@ -911,6 +938,7 @@ static int tw68_suspend(struct pci_dev *pci_dev , pm_message_t state)
 	struct tw68_dev *dev = container_of(v4l2_dev,
 				struct tw68_dev, v4l2_dev);
 
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 	dev->pci_irqmask &= ~TW68_VID_INTS;
 	tw_writel(TW68_INTMASK, 0);
@@ -941,6 +969,7 @@ static int tw68_resume(struct pci_dev *pci_dev)
 					    struct tw68_dev, v4l2_dev);
 	unsigned long flags;
 
+	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	pci_set_power_state(pci_dev, PCI_D0);
 	pci_restore_state(pci_dev);
 
@@ -1005,6 +1034,8 @@ static struct pci_driver tw68_pci_driver = {
 
 static int tw68_init(void)
 {
+	if (core_debug & DBG_FLOW)
+		printk(KERN_DEBUG "%s: called\n", __func__);
 	INIT_LIST_HEAD(&tw68_devlist);
 	printk(KERN_INFO "tw68: v4l2 driver version %d.%d.%d loaded\n",
 		(TW68_VERSION_CODE >> 16) & 0xff,
@@ -1019,6 +1050,8 @@ static int tw68_init(void)
 
 static void module_cleanup(void)
 {
+	if (core_debug & DBG_FLOW)
+		printk(KERN_DEBUG "%s: called\n", __func__);
 	pci_unregister_driver(&tw68_pci_driver);
 }
 
