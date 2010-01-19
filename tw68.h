@@ -27,7 +27,7 @@
  */
 
 #include <linux/version.h>
-#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 2)
+#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 3)
 
 #include <linux/pci.h>
 #include <linux/i2c.h>
