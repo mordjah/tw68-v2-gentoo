@@ -126,6 +126,7 @@ static struct tw68_format formats[] = {
 
 #define NORM_625_50			\
 		.h_delay	= 3,	\
+		.h_delay0	= 133,	\
 		.h_start	= 0,	\
 		.h_stop		= 719,	\
 		.v_delay	= 24,	\
@@ -137,6 +138,7 @@ static struct tw68_format formats[] = {
 
 #define NORM_525_60			\
 		.h_delay	= 8,	\
+		.h_delay0	= 138,	\
 		.h_start	= 0,	\
 		.h_stop		= 719,	\
 		.v_delay	= 22,	\
@@ -590,7 +592,15 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 		dev->tvnorm->v_delay, dev->tvnorm->video_v_start,
 		dev->tvnorm->video_v_stop);
 
-	hdelay = dev->tvnorm->h_delay + dev->crop_bounds.left;
+	switch (dev->vdecoder) {
+	case TW6800:
+		hdelay = dev->tvnorm->h_delay0;
+		break;
+	default:
+		hdelay = dev->tvnorm->h_delay;
+		break;
+	}
+	hdelay += dev->crop_bounds.left;
 	hactive = dev->crop_bounds.width;
 
 	hscale = (hactive * 256) / (width);
@@ -648,11 +658,11 @@ static int tw68_video_start_dma(struct tw68_dev *dev, struct tw68_dmaqueue *q,
 	/* Set start address for RISC program */
 	tw_writel(TW68_DMAP_SA, cpu_to_le32(buf->risc.dma));
 	/* Clear any pending interrupts */
-	tw_writel(TW68_INTSTAT, TW68_VID_INTS);
+	tw_writel(TW68_INTSTAT, dev->board_virqmask);
 	/* Enable the risc engine and the fifo */
 	tw_andorl(TW68_DMAC, 0x7f, buf->fmt->twformat |
 		ColorFormatGamma | TW68_DMAP_EN | TW68_FIFO_EN);
-	dev->pci_irqmask |= TW68_VID_INTS;
+	dev->pci_irqmask |= dev->board_virqmask;
 	tw_setl(TW68_INTMASK, dev->pci_irqmask);
 	return 0;
 }
@@ -2117,10 +2127,6 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 {
 	__u32 reg;
 
-	status &= TW68_VID_INTS;
-	if (0 == status)
-		return;		/* if not a video interrupt, return */
-
 	/* reset interrupts handled by this routine */
 	tw_writel(TW68_INTSTAT, status);
 	/*
@@ -2145,9 +2151,9 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 		    (reg < q->stopper.dma + q->stopper.size)) {
 			/* Yes - stop risc & fifo */
 			tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-			tw_clearl(TW68_INTMASK, TW68_VID_INTS);
-			dev->pci_irqmask &= ~TW68_VID_INTS;
-			status &= ~TW68_VID_INTS;
+			tw_clearl(TW68_INTMASK, dev->board_virqmask);
+			dev->pci_irqmask &= ~dev->board_virqmask;
+			status &= ~dev->board_virqmask;
 			dprintk(DBG_FLOW, "%s: stopper risc code entered\n",
 				__func__);
 		}
@@ -2165,15 +2171,15 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 		dprintk(DBG_UNEXPECTED, "DMAPERR interrupt\n");
 		/* Stop risc & fifo */
 		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-		tw_clearl(TW68_INTMASK, TW68_VID_INTS);
-		dev->pci_irqmask &= ~TW68_VID_INTS;
+		tw_clearl(TW68_INTMASK, dev->board_virqmask);
+		dev->pci_irqmask &= ~dev->board_virqmask;
 	}
 	if (status & TW68_FDMIS) {	/* logic error somewhere */
 		dprintk(DBG_UNEXPECTED, "FDMIS interrupt\n");
 		/* Stop risc & fifo */
 		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-		tw_clearl(TW68_INTMASK, TW68_VID_INTS);
-		dev->pci_irqmask &= ~TW68_VID_INTS;
+		tw_clearl(TW68_INTMASK, dev->board_virqmask);
+		dev->pci_irqmask &= ~dev->board_virqmask;
 	}
 	if (status & TW68_FFOF) {	/* probably a logic error */
 		dprintk(DBG_FLOW, "FFOF interrupt\n");

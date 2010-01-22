@@ -88,3 +88,17 @@ Corrected value for setting of ColorFormatGamma bit.
 Added VLOCK and HLOCK to video interrupt handling routine.
 Corrected tw_clearb macro definition.
 Bumped version number to 0.0.3
+
+22 January 2010
+Enhanced code to cater for the TW6800
+
+With great assistance from Robby Cerantola, found and fixed the major spot
+that was preventing the TW6800 from synchronizing and starting its display.
+This was the fact that the VLOCK and HLOCK bits in the interrupt register are
+handled differently in the TW6800.
+Added code to save the chip type in the device structure, and to use it for
+setting up registers differently for the different Techwell chip types.  Also
+did a little cleanup in the interrupt handling code.  Added code within the
+tw68_set_scale routine to set different register values depending upon the
+chip type (for now, the only register different is h_delay).
+Bumped version number to 0.0.4.

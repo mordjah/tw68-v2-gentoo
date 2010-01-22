@@ -29,16 +29,6 @@
 #define _TW68_REG_H_
 
 /* ---------------------------------------------------------------------- */
-/* PCI IDs and config space                                               */
-
-#ifndef PCI_VENDOR_ID_JUMPTEC
-# define PCI_VENDOR_ID_JUMPTEC		0x1797
-#endif
-#ifndef PCI_DEVICE_ID_TW6801_VID
-# define PCI_DEVICE_ID_TW6801_VID	0x6801
-#endif
-
-/* ---------------------------------------------------------------------- */
 #define	TW68_DMAC		0x000
 #define	TW68_DMAP_SA		0x004
 #define	TW68_DMAP_EXE		0x008

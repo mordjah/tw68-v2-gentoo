@@ -27,7 +27,7 @@
  */
 
 #include <linux/version.h>
-#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 3)
+#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 4)
 
 #include <linux/pci.h>
 #include <linux/i2c.h>
@@ -67,11 +67,11 @@
 
 /* system vendor and device ID's */
 #define	PCI_VENDOR_ID_TECHWELL	0x1797
-#define	PCI_DEVICE_ID_VIDEO0	0x6800
-#define	PCI_DEVICE_ID_VIDEO1	0x6801
+#define	PCI_DEVICE_ID_6800	0x6800
+#define	PCI_DEVICE_ID_6801	0x6801
 #define	PCI_DEVICE_ID_AUDIO2	0x6802
 #define	PCI_DEVICE_ID_TS3	0x6803
-#define	PCI_DEVICE_ID_VIDEO4	0x6804
+#define	PCI_DEVICE_ID_6804	0x6804
 #define	PCI_DEVICE_ID_AUDIO5	0x6805
 #define	PCI_DEVICE_ID_TS6	0x6806
 
@@ -84,14 +84,18 @@
 	V4L2_STD_PAL_M  | V4L2_STD_PAL_N     | V4L2_STD_PAL_Nc   | \
 	V4L2_STD_PAL_60 | V4L2_STD_SECAM_L   | V4L2_STD_SECAM_DK)
 
-#define	TW68_VID_INTS	(\
-			 TW68_VLOCK | TW68_HLOCK  | \
-			 TW68_FFERR | TW68_PABORT | TW68_DMAPERR | \
+#define	TW68_VID_INTS	(TW68_FFERR | TW68_PABORT | TW68_DMAPERR | \
 			 TW68_FDMIS | TW68_FFOF   | TW68_DMAPI)
 
 #define	TW68_I2C_INTS	(TW68_SBERR | TW68_SBDONE | TW68_SBERR2  | \
 			 TW68_SBDONE2)
 
+typedef enum {
+	TW6800,
+	TW6801,
+	TW6804,
+	TWXXXX,
+} TW68_DECODER_TYPE;
 /* ----------------------------------------------------------- */
 /* static data                                                 */
 
@@ -100,33 +104,34 @@ struct tw68_tvnorm {
 	v4l2_std_id	id;
 
 	/* video decoder */
-	unsigned int	sync_control;
-	unsigned int	luma_control;
-	unsigned int	chroma_ctrl1;
-	unsigned int	chroma_gain;
-	unsigned int	chroma_ctrl2;
-	unsigned int	vgate_misc;
+	u32	sync_control;
+	u32	luma_control;
+	u32	chroma_ctrl1;
+	u32	chroma_gain;
+	u32	chroma_ctrl2;
+	u32	vgate_misc;
 
 	/* video scaler */
-	unsigned int	h_delay;
-	unsigned int	h_start;
-	unsigned int	h_stop;
-	unsigned int	v_delay;
-	unsigned int	video_v_start;
-	unsigned int	video_v_stop;
-	unsigned int	vbi_v_start_0;
-	unsigned int	vbi_v_stop_0;
-	unsigned int	vbi_v_start_1;
+	u32	h_delay;
+	u32	h_delay0;	/* for TW6800 */
+	u32	h_start;
+	u32	h_stop;
+	u32	v_delay;
+	u32	video_v_start;
+	u32	video_v_stop;
+	u32	vbi_v_start_0;
+	u32	vbi_v_stop_0;
+	u32	vbi_v_start_1;
 
 	/* Techwell specific */
-	unsigned int	format;
+	u32	format;
 };
 
 struct tw68_format {
-	char		*name;
-	unsigned int	fourcc;
-	unsigned int	depth;
-	u32		twformat;
+	char	*name;
+	u32	fourcc;
+	u32	depth;
+	u32	twformat;
 };
 
 /* ----------------------------------------------------------- */
@@ -341,6 +346,7 @@ struct tw68_dev {
 	int			autodetected;
 
 	/* various device info */
+	TW68_DECODER_TYPE	vdecoder;
 	unsigned int		resources;
 	struct video_device	*video_dev;
 	struct video_device	*radio_dev;
@@ -359,6 +365,8 @@ struct tw68_dev {
 	u32			__iomem *lmmio;
 	u8			__iomem *bmmio;
 	u32			pci_irqmask;
+	/* The irq mask to be used will depend upon the chip type */
+	u32			board_virqmask;
 
 	/* config info */
 	unsigned int		board;

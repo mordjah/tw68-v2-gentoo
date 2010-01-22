@@ -96,19 +96,19 @@ const unsigned int tw68_bcount = ARRAY_SIZE(tw68_boards);
 struct pci_device_id tw68_pci_tbl[] = {
 	{
 		.vendor		= PCI_VENDOR_ID_TECHWELL,
-		.device		= PCI_DEVICE_ID_VIDEO0,
+		.device		= PCI_DEVICE_ID_6800,
 		.subvendor	= PCI_ANY_ID,
 		.subdevice	= PCI_ANY_ID,
 		.driver_data	= TW68_BOARD_UNKNOWN,
 	}, {
 		.vendor		= PCI_VENDOR_ID_TECHWELL,
-		.device		= PCI_DEVICE_ID_VIDEO1,
+		.device		= PCI_DEVICE_ID_6801,
 		.subvendor	= PCI_ANY_ID,
 		.subdevice	= PCI_ANY_ID,
 		.driver_data	= TW68_BOARD_UNKNOWN,
 	}, {
 		.vendor		= PCI_VENDOR_ID_TECHWELL,
-		.device		= PCI_DEVICE_ID_VIDEO4,
+		.device		= PCI_DEVICE_ID_6804,
 		.subvendor	= PCI_ANY_ID,
 		.subdevice	= PCI_ANY_ID,
 		.driver_data	= TW68_BOARD_UNKNOWN,

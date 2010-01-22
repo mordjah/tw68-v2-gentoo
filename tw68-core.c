@@ -537,20 +537,20 @@ static irqreturn_t tw68_irq(int irq, void *dev_id)
 	u32 status, orig;
 	int loop;
 
-	status = orig = tw_readl(TW68_INTSTAT);
+	status = orig = tw_readl(TW68_INTSTAT) & dev->pci_irqmask;
 	/* Check if anything to do */
 	if (0 == status)
 		return IRQ_RETVAL(0);	/* Nope - return */
 	for (loop = 0; loop < 10; loop++) {
-		status = tw_readl(TW68_INTSTAT) & dev->pci_irqmask;
-		if (0 == status)
-			goto out;
-		if (status & TW68_VID_INTS)	/* video interrupt */
+		if (status & dev->board_virqmask)	/* video interrupt */
 			tw68_irq_video_done(dev, status);
 #ifdef TW68_TESTING
 		if (status & TW68_I2C_INTS)
 			tw68_irq_i2c(dev, status);
 #endif
+		status = tw_readl(TW68_INTSTAT) & dev->pci_irqmask;
+		if (0 == status)
+			goto out;
 	}
 	printk(KERN_WARNING "%s: irq loop done - clearing mask (orig "
 			    "0x%08x, cur 0x%08x)\n",
@@ -711,6 +711,24 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 		goto fail1;
 	}
 
+	switch (pci_id->device) {
+	case PCI_DEVICE_ID_6800:	/* TW6800 */
+		dev->vdecoder = TW6800;
+		dev->board_virqmask = TW68_VID_INTS;
+		break;
+	case PCI_DEVICE_ID_6801:	/* Video decoder for TW6802 */
+		dev->vdecoder = TW6801;
+		dev->board_virqmask = TW68_VID_INTS | TW68_HLOCK | TW68_VLOCK;
+		break;
+	case PCI_DEVICE_ID_6804:	/* Video decoder for TW6805 */
+		dev->vdecoder = TW6804;
+		dev->board_virqmask = TW68_VID_INTS | TW68_HLOCK | TW68_VLOCK;
+		break;
+	default:
+		dev->vdecoder = TWXXXX;	/* To be announced */
+		dev->board_virqmask = TW68_VID_INTS | TW68_HLOCK | TW68_VLOCK;
+		break;
+	}
 	/* board config */
 	dev->board = pci_id->driver_data;
 	if (card[dev->nr] >= 0 &&
