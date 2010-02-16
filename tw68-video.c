@@ -504,7 +504,7 @@ static void res_free(struct tw68_fh *fh,
  */
 static void set_tvnorm(struct tw68_dev *dev, struct tw68_tvnorm *norm)
 {
-	dprintk(DBG_TESTING, "%s: %s\n", __func__, norm->name);
+	dprintk(DBG_FLOW, "%s: %s\n", __func__, norm->name);
 	dev->tvnorm = norm;
 
 	/* setup cropping */
@@ -2174,12 +2174,16 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 		tw_clearl(TW68_INTMASK, dev->board_virqmask);
 		dev->pci_irqmask &= ~dev->board_virqmask;
 	}
+	/*
+	 * On TW6800, FDMIS is apparently generated if video input is switched
+	 * during operation.  Therefore, it is not enabled for that chip.
+	 */
 	if (status & TW68_FDMIS) {	/* logic error somewhere */
 		dprintk(DBG_UNEXPECTED, "FDMIS interrupt\n");
 		/* Stop risc & fifo */
-		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-		tw_clearl(TW68_INTMASK, dev->board_virqmask);
-		dev->pci_irqmask &= ~dev->board_virqmask;
+//		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
+//		tw_clearl(TW68_INTMASK, dev->board_virqmask);
+//		dev->pci_irqmask &= ~dev->board_virqmask;
 	}
 	if (status & TW68_FFOF) {	/* probably a logic error */
 		dprintk(DBG_FLOW, "FFOF interrupt\n");

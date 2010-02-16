@@ -85,7 +85,9 @@
 	V4L2_STD_PAL_60 | V4L2_STD_SECAM_L   | V4L2_STD_SECAM_DK)
 
 #define	TW68_VID_INTS	(TW68_FFERR | TW68_PABORT | TW68_DMAPERR | \
-			 TW68_FDMIS | TW68_FFOF   | TW68_DMAPI)
+			 TW68_FFOF   | TW68_DMAPI)
+/* TW6800 chips have trouble with these, so we don't set them for that chip */
+#define	TW68_VID_INTSX	(TW68_FDMIS | TW68_HLOCK | TW68_VLOCK)
 
 #define	TW68_I2C_INTS	(TW68_SBERR | TW68_SBDONE | TW68_SBERR2  | \
 			 TW68_SBDONE2)

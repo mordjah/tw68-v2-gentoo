@@ -718,15 +718,15 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 		break;
 	case PCI_DEVICE_ID_6801:	/* Video decoder for TW6802 */
 		dev->vdecoder = TW6801;
-		dev->board_virqmask = TW68_VID_INTS | TW68_HLOCK | TW68_VLOCK;
+		dev->board_virqmask = TW68_VID_INTS | TW68_VID_INTSX;
 		break;
 	case PCI_DEVICE_ID_6804:	/* Video decoder for TW6805 */
 		dev->vdecoder = TW6804;
-		dev->board_virqmask = TW68_VID_INTS | TW68_HLOCK | TW68_VLOCK;
+		dev->board_virqmask = TW68_VID_INTS | TW68_VID_INTSX;
 		break;
 	default:
 		dev->vdecoder = TWXXXX;	/* To be announced */
-		dev->board_virqmask = TW68_VID_INTS | TW68_HLOCK | TW68_VLOCK;
+		dev->board_virqmask = TW68_VID_INTS | TW68_VID_INTSX;
 		break;
 	}
 	/* board config */

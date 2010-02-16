@@ -52,12 +52,7 @@ insmod: all
 	@sudo modprobe v4l2_common
 	@sudo modprobe videobuf_dma_sg
 	@sudo modprobe btcx_risc
-ifneq ($(TW68_TESTING),)
-	@sudo modprobe i2c_algo_bit
 	@sudo insmod tw68.ko core_debug=7 video_debug=7
-else
-	@sudo insmod tw68.ko
-endif
 
 run: insmod
 	test -x /usr/bin/v4l2ucp && v4l2ucp &
