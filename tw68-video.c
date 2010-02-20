@@ -20,19 +20,9 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA
- *  02111-1307  USA
- *
- *  Latest revision:	12 Sep 2009
- *
- *  	Enhanced the video standards selection and setting.
- *
- *  	Beginning work on implementing Overlay Mode.  This includes
- *  	enhancement of the cropping and scaling capabilities of the
- *  	driver.  Note that this most of the new code is not usable
- *  	at the moment.
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 #include "tw68.h"
