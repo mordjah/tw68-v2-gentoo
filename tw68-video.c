@@ -57,7 +57,7 @@ MODULE_PARM_DESC(noninterlaced, "capture non interlaced video");
 module_param_string(secam, secam, sizeof(secam), 0644);
 MODULE_PARM_DESC(secam, "force SECAM variant, either DK,L or Lc");
 
-#define dprintk(level, fmt, arg...)     if (video_debug & level) \
+#define dprintk(level, fmt, arg...)     if (video_debug & (level)) \
 	printk(KERN_DEBUG "%s/0: " fmt, dev->name , ## arg)
 
 /* ------------------------------------------------------------------ */
@@ -581,7 +581,7 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 	if (V4L2_FIELD_HAS_BOTH(field))	/* if field is interlaced */
 		height /= 2;		/* we must set for 1-frame */
 
-	dprintk(DBG_TESTING, "%s: width=%d, height=%d, both=%d\n  Crop rect: "
+	dprintk(DBG_FLOW, "%s: width=%d, height=%d, both=%d\n  Crop rect: "
 		    "top=%d, left=%d, width=%d height=%d\n"
 		    "  tvnorm h_delay=%d, h_start=%d, h_stop=%d, "
 		    "v_delay=%d, v_start=%d, v_stop=%d\n" , __func__,
@@ -610,12 +610,12 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 	vactive = dev->crop_bounds.height;
 	vscale = (vactive * 256) / height;
 
-	dprintk(DBG_TESTING, "%s: %dx%d [%s%s,%s]\n", __func__,
+	dprintk(DBG_FLOW, "%s: %dx%d [%s%s,%s]\n", __func__,
 		width, height,
 		V4L2_FIELD_HAS_TOP(field)    ? "T" : "",
 		V4L2_FIELD_HAS_BOTTOM(field) ? "B" : "",
 		v4l2_norm_to_name(dev->tvnorm->id));
-	dprintk(DBG_TESTING, "%s: hactive=%d, hdelay=%d, hscale=%d; "
+	dprintk(DBG_FLOW, "%s: hactive=%d, hdelay=%d, hscale=%d; "
 		"vactive=%d, vdelay=%d, vscale=%d\n", __func__,
 		hactive, hdelay, hscale, vactive, vdelay, vscale);
 
@@ -623,7 +623,7 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 		((vactive & 0x300) >> 4) |
 		((hdelay & 0x300)  >> 6) |
 		((hactive & 0x300) >> 8);
-	dprintk(DBG_TESTING, "%s: setting CROP_HI=%02x, VDELAY_LO=%02x, "
+	dprintk(DBG_FLOW, "%s: setting CROP_HI=%02x, VDELAY_LO=%02x, "
 		"VACTIVE_LO=%02x, HDELAY_LO=%02x, HACTIVE_LO=%02x\n",
 		__func__, comb, vdelay, vactive, hdelay, hactive);
 	tw_writeb(TW68_CROP_HI, comb);
@@ -633,7 +633,7 @@ static int tw68_set_scale(struct tw68_dev *dev, unsigned int width,
 	tw_writeb(TW68_HACTIVE_LO, hactive & 0xff);
 
 	comb = ((vscale & 0xf00) >> 4) | ((hscale & 0xf00) >> 8);
-	dprintk(DBG_TESTING, "%s: setting SCALE_HI=%02x, VSCALE_LO=%02x, "
+	dprintk(DBG_FLOW, "%s: setting SCALE_HI=%02x, VSCALE_LO=%02x, "
 		"HSCALE_LO=%02x\n", __func__, comb, vscale, hscale);
 	tw_writeb(TW68_SCALE_HI, comb);
 	tw_writeb(TW68_VSCALE_LO, vscale);
@@ -655,12 +655,17 @@ static int tw68_video_start_dma(struct tw68_dev *dev, struct tw68_dmaqueue *q,
 	}
 	/* Set cropping and scaling */
 	tw68_set_scale(dev, buf->vb.width, buf->vb.height, buf->vb.field);
-	/* Set start address for RISC program */
+	/*
+	 *  Set start address for RISC program.  Note that if the DMAP
+	 *  processor is currently running, it must be stopped before
+	 *  a new address can be set.
+	 */
+	tw_clearl(TW68_DMAC, TW68_DMAP_EN);
 	tw_writel(TW68_DMAP_SA, cpu_to_le32(buf->risc.dma));
 	/* Clear any pending interrupts */
 	tw_writel(TW68_INTSTAT, dev->board_virqmask);
 	/* Enable the risc engine and the fifo */
-	tw_andorl(TW68_DMAC, 0x7f, buf->fmt->twformat |
+	tw_andorl(TW68_DMAC, 0xff, buf->fmt->twformat |
 		ColorFormatGamma | TW68_DMAP_EN | TW68_FIFO_EN);
 	dev->pci_irqmask |= dev->board_virqmask;
 	tw_setl(TW68_INTMASK, dev->pci_irqmask);
@@ -2137,7 +2142,7 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 	 */
 	if (status & TW68_DMAPI) {
 		struct tw68_dmaqueue *q = &dev->video_q;
-		dprintk(DBG_FLOW, "DMAPI interrupt\n");
+		dprintk(DBG_FLOW | DBG_TESTING, "DMAPI interrupt\n");
 		spin_lock(&dev->slock);
 		/*
 		 * tw68_wakeup will take care of the buffer handling,
@@ -2149,13 +2154,9 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 		reg = tw_readl(TW68_DMAP_PP);
 		if ((reg >= q->stopper.dma) &&
 		    (reg < q->stopper.dma + q->stopper.size)) {
-			/* Yes - stop risc & fifo */
-			tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
-			tw_clearl(TW68_INTMASK, dev->board_virqmask);
-			dev->pci_irqmask &= ~dev->board_virqmask;
-			status &= ~dev->board_virqmask;
-			dprintk(DBG_FLOW, "%s: stopper risc code entered\n",
-				__func__);
+			/* Yes - log the information */
+			dprintk(DBG_FLOW | DBG_TESTING,
+				"%s: stopper risc code entered\n", __func__);
 		}
 		status &= ~(TW68_DMAPI);
 		if (0 == status)
@@ -2169,10 +2170,12 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 	}
 	if (status & TW68_DMAPERR) {
 		dprintk(DBG_UNEXPECTED, "DMAPERR interrupt\n");
+#if 0
 		/* Stop risc & fifo */
 		tw_clearl(TW68_DMAC, TW68_DMAP_EN | TW68_FIFO_EN);
 		tw_clearl(TW68_INTMASK, dev->board_virqmask);
 		dev->pci_irqmask &= ~dev->board_virqmask;
+#endif
 	}
 	/*
 	 * On TW6800, FDMIS is apparently generated if video input is switched
@@ -2186,9 +2189,12 @@ void tw68_irq_video_done(struct tw68_dev *dev, unsigned long status)
 //		dev->pci_irqmask &= ~dev->board_virqmask;
 	}
 	if (status & TW68_FFOF) {	/* probably a logic error */
-		dprintk(DBG_FLOW, "FFOF interrupt\n");
+		reg = tw_readl(TW68_DMAC) & TW68_FIFO_EN;
+		tw_clearl(TW68_DMAC, TW68_FIFO_EN);
+		dprintk(DBG_UNUSUAL, "FFOF interrupt\n");
+		tw_setl(TW68_DMAC, reg);
 	}
 	if (status & TW68_FFERR)
-		dprintk(DBG_FLOW, "FFERR interrupt\n");
+		dprintk(DBG_UNEXPECTED, "FFERR interrupt\n");
 	return;
 }

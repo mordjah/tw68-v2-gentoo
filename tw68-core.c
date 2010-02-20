@@ -48,10 +48,6 @@ MODULE_DESCRIPTION("v4l2 driver module for tw6800 based video capture cards");
 MODULE_AUTHOR("William M. Brack <wbrack@mmm.com.hk>");
 MODULE_LICENSE("GPL");
 
-unsigned int irq_debug;
-module_param(irq_debug, int, 0644);
-MODULE_PARM_DESC(irq_debug, "enable debug messages [IRQ handler]");
-
 static unsigned int core_debug;
 module_param(core_debug, int, 0644);
 MODULE_PARM_DESC(core_debug, "enable debug messages [core]");
@@ -102,7 +98,7 @@ EXPORT_SYMBOL(tw68_dmasound_init);
 int (*tw68_dmasound_exit)(struct tw68_dev *dev);
 EXPORT_SYMBOL(tw68_dmasound_exit);
 
-#define dprintk(level, fmt, arg...)      if (core_debug & level) \
+#define dprintk(level, fmt, arg...)      if (core_debug & (level)) \
 	printk(KERN_DEBUG "%s: " fmt, dev->name , ## arg)
 
 /* ------------------------------------------------------------------ */
@@ -162,7 +158,7 @@ int tw68_buffer_requeue(struct tw68_dev *dev,
 {
 	struct tw68_buf *buf, *prev;
 
-	dprintk(DBG_FLOW, "%s: called\n", __func__);
+	dprintk(DBG_FLOW | DBG_TESTING, "%s: called\n", __func__);
 	if (!list_empty(&q->active)) {
 		buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
 		dprintk(DBG_BUFF, "%s: [%p/%d] restart dma\n", __func__,
@@ -234,13 +230,15 @@ void tw68_wakeup(struct tw68_dmaqueue *q, unsigned int *fc)
 
 	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	if (list_empty(&q->active)) {
+		dprintk(DBG_BUFF | DBG_TESTING, "%s: active list empty",
+			__func__);
 		del_timer(&q->timeout);
 		return;
 	}
 	buf = list_entry(q->active.next, struct tw68_buf, vb.queue);
 	do_gettimeofday(&buf->vb.ts);
 	buf->vb.field_count = (*fc)++;
-	dprintk(DBG_BUFF, "%s: [%p/%d] field_count=%d\n",
+	dprintk(DBG_BUFF | DBG_TESTING, "%s: [%p/%d] field_count=%d\n",
 		__func__, buf, buf->vb.i, *fc);
 	buf->vb.state = VIDEOBUF_DONE;
 	list_del(&buf->vb.queue);
@@ -291,8 +289,8 @@ void tw68_buffer_queue(struct tw68_dev *dev,
 	/* else we would like to put this buffer on the tail of the
 	 * active chain, provided it is "compatible". */
 	} else {
-		prev = list_entry(q->active.prev, struct tw68_buf, vb.queue);
 		/* "compatibility" depends upon the type of buffer */
+		prev = list_entry(q->active.prev, struct tw68_buf, vb.queue);
 		if (q->buf_compat(prev, buf)) {
 			/* If "compatible", append to active chain */
 			prev->risc.jmp[1] = cpu_to_le32(buf->risc.dma);
@@ -552,10 +550,13 @@ static irqreturn_t tw68_irq(int irq, void *dev_id)
 		if (0 == status)
 			goto out;
 	}
-	printk(KERN_WARNING "%s: irq loop done - clearing mask (orig "
-			    "0x%08x, cur 0x%08x)\n",
-			    dev->name, orig, tw_readl(TW68_INTSTAT));
-	tw_writel(TW68_INTMASK, 0);
+	dprintk(DBG_UNEXPECTED, "%s: **** INTERRUPT NOT HANDLED - clearing mask"
+				" (orig 0x%08x, cur 0x%08x)",
+				dev->name, orig, tw_readl(TW68_INTSTAT));
+	dprintk(DBG_UNEXPECTED, "%s: pci_irqmask 0x%08x; board_virqmask "
+				"0x%08x ****\n", dev->name,
+				dev->pci_irqmask, dev->board_virqmask);
+	tw_clearl(TW68_INTMASK, dev->pci_irqmask);
 out:
 	return IRQ_RETVAL(1);
 }

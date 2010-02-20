@@ -236,23 +236,32 @@ EXPORT_SYMBOL_GPL(tw68_risc_program_dump);
 
 /*
  * tw68_risc_stopper
- * 	The 'risc_stopper' acts as a switch to direct the risc code
- * 	to the buffer at the head of the chain of active buffers.
+ * 	Normally, the risc code generated for a buffer ends with a
+ * 	JUMP instruction to direct the DMAP processor to the code for
+ * 	the next buffer.  However, when there is no additional buffer
+ * 	currently available, the code instead jumps to this routine.
  *
- * 	For the initial implementation, the "stopper" program is a
- * 	simple jump-to-self.
+ * 	My first try for a "stopper" program was just a simple
+ * 	"jump to self" instruction.  Unfortunately, this caused the
+ * 	video FIFO to overflow.  My next attempt was to just disable
+ * 	the DMAP processor.  Unfortunately, this caused the video
+ * 	decoder to lose its synchronization.  The solution to this was to
+ * 	add a "Sync-Odd" instruction, which "eats" all the video data
+ * 	until the start of the next odd field.
  */
 int tw68_risc_stopper(struct pci_dev *pci, struct btcx_riscmem *risc)
 {
 	__le32 *rp;
 	int rc;
 
-	rc = btcx_riscmem_alloc(pci, risc, 4*4);
+	rc = btcx_riscmem_alloc(pci, risc, 8*4);
 	if (rc < 0)
 		return rc;
 
 	/* write risc inststructions */
 	rp = risc->cpu;
+	*(rp++) = cpu_to_le32(RISC_SYNCO);
+	*(rp++) = 0;
 	*(rp++) = cpu_to_le32(RISC_JUMP);
 	*(rp++) = cpu_to_le32(risc->dma);
 	risc->jmp = risc->cpu;
