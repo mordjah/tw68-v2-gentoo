@@ -26,9 +26,10 @@ ifneq ($(KERNELRELEASE),)
 
 tw68-objs := tw68-core.o tw68-cards.o tw68-video.o \
 	     tw68-vbi.o tw68-ts.o tw68-risc.o tw68-tvaudio.o
+
 ifneq ($(TW68_TESTING),)
 tw68-objs += tw68-i2c.o
-EXTRA_CFLAGS = -DTW68_TESTING
+EXTRA_CFLAGS += -DTW68_TESTING
 endif
 
 obj-m += tw68.o
@@ -52,7 +53,7 @@ insmod: all
 	@sudo modprobe v4l2_common
 	@sudo modprobe videobuf_dma_sg
 	@sudo modprobe btcx_risc
-	@sudo insmod tw68.ko core_debug=7 video_debug=7
+	@sudo insmod tw68.ko core_debug=3 video_debug=3
 
 run: insmod
 	test -x /usr/bin/v4l2ucp && v4l2ucp &

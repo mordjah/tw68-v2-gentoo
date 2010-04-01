@@ -405,7 +405,8 @@ static int tw68_hw_init1(struct tw68_dev *dev)
 	tw_writeb(TW68_AGCGAIN, 0xf0);	/* 288	AGC gain when loop disabled */
 	tw_writeb(TW68_PEAKWT, 0xd8);	/* 28C	White peak threshold */
 	tw_writeb(TW68_CLMPL, 0x3c);	/* 290	Y channel clamp level */
-	tw_writeb(TW68_SYNCT, 0x38);	/* 294	Sync amplitude */
+//	tw_writeb(TW68_SYNCT, 0x38);	/* 294	Sync amplitude */
+	tw_writeb(TW68_SYNCT, 0x30);	/* 294	Sync amplitude */
 	tw_writeb(TW68_MISSCNT, 0x44);	/* 298	Horiz sync, VCR detect sens */
 	tw_writeb(TW68_PCLAMP, 0x28);	/* 29C	Clamp pos from PLL sync */
 	/* Bit DETV of VCNTL1 helps sync multi cams/chip board */
