@@ -994,7 +994,11 @@ static int tw68_s_ctrl_internal(struct tw68_dev *dev,  struct tw68_fh *fh,
 
 	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (fh) {
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,34)
 		err = v4l2_prio_check(&dev->prio, &fh->prio);
+#else
+		err = v4l2_prio_check(&dev->prio, fh->prio);
+#endif
 		if (0 != err)
 			return err;
 	}
@@ -1233,7 +1237,11 @@ static int video_release(struct file *file)
 	videobuf_mmap_free(&fh->cap);
 	videobuf_mmap_free(&fh->vbi);
 
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,34)
 	v4l2_prio_close(&dev->prio, &fh->prio);
+#else
+	v4l2_prio_close(&dev->prio, fh->prio);
+#endif
 	file->private_data = NULL;
 	kfree(fh);
 	return 0;
@@ -1466,7 +1474,12 @@ static int tw68_s_input(struct file *file, void *priv, unsigned int i)
 	int err;
 
 	dprintk(DBG_FLOW, "%s\n", __func__);
-	err = v4l2_prio_check(&dev->prio, &fh->prio);
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,34)
+		err = v4l2_prio_check(&dev->prio, &fh->prio);
+#else
+		err = v4l2_prio_check(&dev->prio, fh->prio);
+#endif
+		if (0 != err)
 	if (0 != err)
 		return err;
 
@@ -1516,7 +1529,12 @@ static int tw68_s_std_internal(struct tw68_dev *dev, struct tw68_fh *fh,
 
 	dprintk(DBG_FLOW, "%s\n", __func__);
 	if (fh) {
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,34)
 		err = v4l2_prio_check(&dev->prio, &fh->prio);
+#else
+		err = v4l2_prio_check(&dev->prio, fh->prio);
+#endif
+		if (0 != err)
 		if (0 != err)
 			return err;
 	}
@@ -1627,7 +1645,12 @@ static int tw68_s_tuner(struct file *file, void *priv,
 	int rx, mode
 #endif
 
-	err = v4l2_prio_check(&dev->prio, &fh->prio);
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,34)
+		err = v4l2_prio_check(&dev->prio, &fh->prio);
+#else
+		err = v4l2_prio_check(&dev->prio, fh->prio);
+#endif
+		if (0 != err)
 	if (0 != err)
 		return err;
 
@@ -1666,7 +1689,12 @@ static int tw68_s_frequency(struct file *file, void *priv,
 
 	if (unlikely(UNSET == dev->tuner_type))
 		return -EINVAL;
-	err = v4l2_prio_check(&dev->prio, &fh->prio);
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,34)
+		err = v4l2_prio_check(&dev->prio, &fh->prio);
+#else
+		err = v4l2_prio_check(&dev->prio, fh->prio);
+#endif
+		if (0 != err)
 	if (0 != err)
 		return err;
 

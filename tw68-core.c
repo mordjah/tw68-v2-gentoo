@@ -111,7 +111,11 @@ void tw68_dma_free(struct videobuf_queue *q, struct tw68_buf *buf)
 	BUG_ON(in_interrupt());
 
 	videobuf_waiton(&buf->vb, 0, 0);
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35)	
 	videobuf_dma_unmap(q, dma);
+#else
+	videobuf_dma_unmap(q->dev, dma);
+#endif
 	videobuf_dma_free(dma);
 	/* if no risc area allocated, btcx_riscmem_free just returns */
 	btcx_riscmem_free(to_pci_dev(q->dev), &buf->risc);
