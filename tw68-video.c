@@ -1122,13 +1122,13 @@ found:
 			    V4L2_BUF_TYPE_VIDEO_CAPTURE,
 			    V4L2_FIELD_INTERLACED,
 			    sizeof(struct tw68_buf),
-			    fh);
+			    fh, &dev->lock);
 	videobuf_queue_sg_init(&fh->vbi, &tw68_vbi_qops,
 			    &dev->pci->dev, &dev->slock,
 			    V4L2_BUF_TYPE_VBI_CAPTURE,
 			    V4L2_FIELD_SEQ_TB,
 			    sizeof(struct tw68_buf),
-			    fh);
+			    fh, &dev->lock);
 	if (fh->radio) {
 		/* switch to radio mode */
 		tw68_tvaudio_setinput(dev, &card(dev).radio);
