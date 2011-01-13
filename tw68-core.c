@@ -110,7 +110,7 @@ void tw68_dma_free(struct videobuf_queue *q, struct tw68_buf *buf)
 		printk(KERN_DEBUG "%s: called\n", __func__);
 	BUG_ON(in_interrupt());
 
-	videobuf_waiton(&buf->vb, 0, 0);
+	videobuf_waiton(q, &buf->vb, 0, 0);
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,35)	
 	videobuf_dma_unmap(q, dma);
 #else
