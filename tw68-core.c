@@ -135,16 +135,6 @@ static void tw68_input_fini(struct tw68_dev *dev)
 	return;
 }
 
-static void tw68_ir_start(struct tw68_dev *dev, struct card_ir *ir)
-{
-	return;
-}
-
-static void tw68_ir_stop(struct tw68_dev *dev)
-{
-	return;
-}
-
 /* ------------------------------------------------------------------ */
 /*
  * Buffer handling routines

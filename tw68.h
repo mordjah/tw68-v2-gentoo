@@ -46,7 +46,6 @@
 #include <media/v4l2-device.h>
 
 #include <media/tuner.h>
-#include <media/ir-common.h>
 #include <media/ir-kbd-i2c.h>
 #include <media/videobuf-dma-sg.h>
 
