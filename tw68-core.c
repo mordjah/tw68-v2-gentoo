@@ -658,7 +658,6 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 	struct tw68_mpeg_ops *mops;
 	int err;
 
-	dprintk(DBG_FLOW, "%s: called\n", __func__);
 	if (tw68_devcount == TW68_MAXBOARDS)
 		return -ENOMEM;
 
