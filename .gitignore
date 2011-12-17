@@ -1,0 +1,12 @@
+*.swp
+*~
+*.d
+*.cmd
+*.o
+tags
+*.vim
+.tmp_versions/
+Module.symvers
+modules.order
+*.ko
+*.mod.c
