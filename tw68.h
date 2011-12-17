@@ -46,6 +46,9 @@
 #include <media/v4l2-device.h>
 
 #include <media/tuner.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0)
+#  include <media/ir-common.h>
+#endif
 #include <media/ir-kbd-i2c.h>
 #include <media/videobuf-dma-sg.h>
 
@@ -355,9 +358,11 @@ struct tw68_dev {
 	struct video_device	*vbi_dev;
 	struct tw68_dmasound	dmasound;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0)
 	/* infrared remote */
 	int			has_remote;
 	struct card_ir		*remote;
+#endif
 
 	/* pci i/o */
 	char			name[32];
