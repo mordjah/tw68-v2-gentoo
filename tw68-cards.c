@@ -112,6 +112,30 @@ struct pci_device_id tw68_pci_tbl[] = {
 		.subdevice	= PCI_ANY_ID,
 		.driver_data	= TW68_BOARD_UNKNOWN,
 	}, {
+		.vendor		= PCI_VENDOR_ID_TECHWELL,
+		.device		= PCI_DEVICE_ID_6816_1,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= PCI_ANY_ID,
+		.driver_data	= TW68_BOARD_UNKNOWN,
+	}, {
+		.vendor		= PCI_VENDOR_ID_TECHWELL,
+		.device		= PCI_DEVICE_ID_6816_2,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= PCI_ANY_ID,
+		.driver_data	= TW68_BOARD_UNKNOWN,
+	}, {
+		.vendor		= PCI_VENDOR_ID_TECHWELL,
+		.device		= PCI_DEVICE_ID_6816_3,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= PCI_ANY_ID,
+		.driver_data	= TW68_BOARD_UNKNOWN,
+	}, {
+		.vendor		= PCI_VENDOR_ID_TECHWELL,
+		.device		= PCI_DEVICE_ID_6816_4,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= PCI_ANY_ID,
+		.driver_data	= TW68_BOARD_UNKNOWN,
+	}, {
 		/* end of list */
 	}
 };

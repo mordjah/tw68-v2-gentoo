@@ -27,7 +27,7 @@
  */
 
 #include <linux/version.h>
-#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 4)
+#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 5)
 
 #include <linux/pci.h>
 #include <linux/i2c.h>
@@ -76,6 +76,12 @@
 #define	PCI_DEVICE_ID_6804	0x6804
 #define	PCI_DEVICE_ID_AUDIO5	0x6805
 #define	PCI_DEVICE_ID_TS6	0x6806
+
+/* tw6816 based cards */
+#define	PCI_DEVICE_ID_6816_1   0x6810
+#define	PCI_DEVICE_ID_6816_2   0x6811
+#define	PCI_DEVICE_ID_6816_3   0x6812
+#define	PCI_DEVICE_ID_6816_4   0x6813
 
 /* subsystem vendor ID's */
 #define	TW68_PCI_ID_TECHWELL	0x1797
