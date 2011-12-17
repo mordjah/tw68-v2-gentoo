@@ -25,10 +25,11 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include "tw68.h"
-#include "tw68-reg.h"
 #include <media/v4l2-common.h>
 #include <linux/sort.h>
+
+#include "tw68.h"
+#include "tw68-reg.h"
 
 unsigned int video_debug;
 
