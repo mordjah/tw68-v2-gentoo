@@ -10,4 +10,11 @@ Module.symvers
 modules.order
 *.ko
 *.mod.c
-debian/
+debian/files
+debian/tw68-dkms.debhelper.log
+debian/tw68-dkms.dkms.debhelper
+debian/tw68-dkms.postinst.debhelper
+debian/tw68-dkms.preinst.debhelper
+debian/tw68-dkms.prerm.debhelper
+debian/tw68-dkms.substvars
+debian/tw68-dkms/

@@ -1,0 +1,20 @@
+Source: tw68
+Section: kernel
+Priority: extra
+Maintainer: Andrey Nikitin <avreg-support@mail.ru>
+# DM-Upload-Allowed: yes
+Build-Depends: debhelper (>= 8), dkms
+Standards-Version: 3.9.1
+Homepage: http://gitorious.org/tw68/avreg-tw68-v2
+Vcs-Git: git://gitorious.org/tw68/avreg-tw68-v2.git
+Vcs-Browser: http://gitorious.org/tw68/avreg-tw68-v2/trees/master
+
+Package: tw68-dkms
+Architecture: all
+Depends: ${misc:Depends}
+Description: dkms source for Techwell TW68xx PCI video decoders
+ tw68 is the video4linux2 device driver released for Techwell TW6800,
+ TW6801, TW6804 and TW6816 PCI video decoders with audio support.
+ .
+ This package provides the dkms source code for the tw68 kernel modules.
+ Kernel source or headers are required to compile these modules.

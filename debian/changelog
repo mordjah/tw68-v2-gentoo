@@ -1,0 +1,8 @@
+tw68 (0.0.5) unstable; urgency=low
+
+  * Project has been cloned from git://gitorious.org/tw68/tw68-v2.git.
+    TW6816 decoder support now available, bump version to 0.0.5.
+    dkms.comf has been added.
+    Made few small fixes for successfully build on some kernels.
+
+ -- Andrey Nikitin <avreg-support@mail.ru>  Sat, 17 Dec 2011 13:40:54 +0400
