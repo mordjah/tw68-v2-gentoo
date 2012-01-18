@@ -1,3 +1,10 @@
+tw68 (0.0.6) unstable; urgency=low
+
+  * (bugfix) fix build on 3.0.x
+  * (bugfix) dkms.conf: add necessary BUILT_MODULE_NAME directive.
+
+ -- Andrey Nikitin <avreg-support@mail.ru>  Wed, 18 Jan 2012 16:30:43 +0400
+
 tw68 (0.0.5) unstable; urgency=low
 
   * Project has been cloned from git://gitorious.org/tw68/tw68-v2.git.
