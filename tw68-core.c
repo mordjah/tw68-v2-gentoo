@@ -139,7 +139,7 @@ static void tw68_input_fini(struct tw68_dev *dev)
 	return;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
 static void tw68_ir_start(struct tw68_dev *dev, struct card_ir *ir)
 {
 	return;
@@ -981,7 +981,7 @@ static int tw68_suspend(struct pci_dev *pci_dev , pm_message_t state)
 	del_timer(&dev->vbi_q.timeout);
 	del_timer(&dev->ts_q.timeout);
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
    if (dev->remote)
 		tw68_ir_stop(dev);
 #endif
@@ -1013,7 +1013,7 @@ static int tw68_resume(struct pci_dev *pci_dev)
 		tw68_videoport_init(dev);
 	if (card_has_mpeg(dev))
 		tw68_ts_init_hw(dev);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
 	if (dev->remote)
 		tw68_ir_start(dev, dev->remote);
 #endif

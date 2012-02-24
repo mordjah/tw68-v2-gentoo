@@ -27,7 +27,7 @@
  */
 
 #include <linux/version.h>
-#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 5)
+#define	TW68_VERSION_CODE	KERNEL_VERSION(0, 0, 7)
 
 #include <linux/pci.h>
 #include <linux/i2c.h>
@@ -46,7 +46,7 @@
 #include <media/v4l2-device.h>
 
 #include <media/tuner.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
 #  include <media/ir-common.h>
 #endif
 #include <media/ir-kbd-i2c.h>

@@ -1,3 +1,10 @@
+tw68 (0.0.7) unstable; urgency=low
+
+  * (bugfix) disable legacy ir-common support for >= 2.6.38,
+    fix build on 2.6.38 and 2.6.39.
+
+ -- Andrey Nikitin <avreg-support@mail.ru>  Fri, 24 Feb 2012 10:12:07 +0400
+
 tw68 (0.0.6) unstable; urgency=low
 
   * (bugfix) fix build on 3.0.x
