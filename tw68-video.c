@@ -25,6 +25,7 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include <linux/module.h>
 #include <media/v4l2-common.h>
 #include <linux/sort.h>
 

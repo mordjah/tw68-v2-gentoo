@@ -1,3 +1,9 @@
+tw68 (0.0.8) unstable; urgency=low
+
+  * append lost module.h includes (broken build on 3.2). 
+
+ -- Andrey Nikitin <avreg-support@mail.ru>  Tue, 27 Mar 2012 17:55:02 +0400
+
 tw68 (0.0.7) unstable; urgency=low
 
   * (bugfix) disable legacy ir-common support for >= 2.6.38,
