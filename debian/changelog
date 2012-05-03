@@ -1,0 +1,28 @@
+tw68 (0.0.8) unstable; urgency=low
+
+  * append lost module.h includes (broken build on 3.2). 
+
+ -- Andrey Nikitin <avreg-support@mail.ru>  Tue, 27 Mar 2012 17:55:02 +0400
+
+tw68 (0.0.7) unstable; urgency=low
+
+  * (bugfix) disable legacy ir-common support for >= 2.6.38,
+    fix build on 2.6.38 and 2.6.39.
+
+ -- Andrey Nikitin <avreg-support@mail.ru>  Fri, 24 Feb 2012 10:12:07 +0400
+
+tw68 (0.0.6) unstable; urgency=low
+
+  * (bugfix) fix build on 3.0.x
+  * (bugfix) dkms.conf: add necessary BUILT_MODULE_NAME directive.
+
+ -- Andrey Nikitin <avreg-support@mail.ru>  Wed, 18 Jan 2012 16:30:43 +0400
+
+tw68 (0.0.5) unstable; urgency=low
+
+  * Project has been cloned from git://gitorious.org/tw68/tw68-v2.git.
+    TW6816 decoder support now available, bump version to 0.0.5.
+    dkms.comf has been added.
+    Made few small fixes for successfully build on some kernels.
+
+ -- Andrey Nikitin <avreg-support@mail.ru>  Sat, 17 Dec 2011 13:40:54 +0400

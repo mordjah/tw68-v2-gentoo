@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+DEB_UPSTREAM_VERSION=$(shell dpkg-parsechangelog | sed -rne 's,^Version: ([^-]+).*,\1,p')
+
+%:
+	dh $@ --with dkms
+
+override_dh_install:
+	dh_install *.h *.c Makefile usr/src/tw68-$(DEB_UPSTREAM_VERSION)/
+
+override_dh_dkms:
+	dh_dkms -V $(VERSION) -- dkms.conf
+
+override_dh_installmodules:
+	dh_installmodules --name=tw68
+
+# do nothing
+override_dh_auto_configure override_dh_auto_build override_dh_auto_test override_dh_auto_install override_dh_auto_clean:
