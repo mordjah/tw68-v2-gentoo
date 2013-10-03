@@ -509,7 +509,7 @@ int tw68_buffer_requeue(struct tw68_dev *dev, struct tw68_dmaqueue *q);
 
 extern struct tw68_board tw68_boards[];
 extern const unsigned int tw68_bcount;
-extern struct pci_device_id __devinitdata tw68_pci_tbl[];
+extern struct pci_device_id tw68_pci_tbl[];
 
 int tw68_board_init1(struct tw68_dev *dev);
 int tw68_board_init2(struct tw68_dev *dev);

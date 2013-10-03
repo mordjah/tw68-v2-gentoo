@@ -511,7 +511,7 @@ static int tw68_hwfini(struct tw68_dev *dev)
 	return 0;
 }
 
-static void __devinit must_configure_manually(void)
+static void must_configure_manually(void)
 {
 	unsigned int i, p;
 
@@ -651,7 +651,7 @@ static void mpeg_ops_detach(struct tw68_mpeg_ops *ops,
 	dev->mops = NULL;
 }
 
-static int __devinit tw68_initdev(struct pci_dev *pci_dev,
+static int tw68_initdev(struct pci_dev *pci_dev,
 				     const struct pci_device_id *pci_id)
 {
 	struct tw68_dev *dev;
@@ -907,7 +907,7 @@ static int __devinit tw68_initdev(struct pci_dev *pci_dev,
 	return err;
 }
 
-static void __devexit tw68_finidev(struct pci_dev *pci_dev)
+static void tw68_finidev(struct pci_dev *pci_dev)
 {
 	struct v4l2_device *v4l2_dev = pci_get_drvdata(pci_dev);
 	struct tw68_dev *dev =
@@ -1057,7 +1057,7 @@ static struct pci_driver tw68_pci_driver = {
 	.name	  = "tw68",
 	.id_table = tw68_pci_tbl,
 	.probe	  = tw68_initdev,
-	.remove	  = __devexit_p(tw68_finidev),
+	.remove	  = tw68_finidev,
 #ifdef CONFIG_PM
 	.suspend  = tw68_suspend,
 	.resume   = tw68_resume

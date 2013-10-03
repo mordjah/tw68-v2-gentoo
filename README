@@ -5,6 +5,32 @@ current kernel sources, or at least the "kernel-headers" and the
 "kernel-development" packages (different names may be used for these
 on different distrubutions).
 
+----------------------------------------------------
+-
+- *for clarity, i (not the author..) have found that it is best to enter 
+- your linux source (or header) dir and use the
+- "make M=/path/to/tw68-v2 <clean/make_modules/modules_install...>"
+- style syntax rather than trying to build from the source dir directly. 
+- it should not matter, but it does.
+-
+- and since im here, im gonna top post :)
+-
+- Current Status - 2 October 2013 noonish PST (us) time 
+-
+- This module has been updated (but hopefully not kludged..) to compule under
+- the 3.10.7 kernel with the Gentoo patchset v1, although your distro's kernel
+-  ought to work fine. i had to remove a bunch of (i assume) old __devinit stuff
+- that looks to have been used in 2.6 kernels, as well as some other minor changes
+- to compile. the driver is reasonably stable and runs 8 outputs at 722x576@30+
+- with very little load on an 8 chip 6801 board (i7-4770/24gb so ymmv) there are 
+- some annoying banding issues and not much in the way of controls or docs. if you 
+- use vlc or one of the v4l2 tools you may get part of the image on the bottom, but 
+- it works fine for me in zoneminder and tvtime. I am requesting the docs form tw's
+- new owner, and i hope it wont be an issue as they are all marked obsolete.
+-
+- IF ANYONE HAS DETAILS OR THE SDK, _PLEASE_ drop me a line @ 
+- dean.w.parshall@gmail.com attn tw68 driver
+--------------------------------------------------------
 
 Current Status - 13 September 2009 10:30am HK Time
 --------------------------------------------------
