@@ -39,7 +39,7 @@ else
 PWD := $(shell pwd)
 KDIR ?= /lib/modules/$(shell uname -r)/build
 TWMODS := /lib/modules/$(shell uname -r)
-TWDEST := $(TWMODS)/kernel/drivers/media/tw68/pci
+TWDEST := $(TWMODS)/kernel/drivers/media/pci/tw68
 
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
@@ -65,8 +65,8 @@ cscope:
 
 install: all
 	sudo find $(TWMODS) -name tw68.ko -exec rm -f {} \;
-	[ -d $(TWMDEST) ] || sudo mkdir -p $(TWDEST)
-	sudo cp -p tw68.ko $(TWDEST)
+	[ -d $(TWDEST) ] || sudo mkdir -p $(TWDEST)
+	sudo cp -p tw68.ko $(TWDEST)/
 	sudo depmod -a
 
 endif
